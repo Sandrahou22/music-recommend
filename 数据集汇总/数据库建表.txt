@@ -1,0 +1,304 @@
+-- 创建数据库
+CREATE DATABASE MusicRecommendationDB;
+GO
+
+USE MusicRecommendationDB;
+GO
+
+-- 1. 歌曲特征表（对应 enhanced_song_features.csv）
+CREATE TABLE enhanced_song_features (
+    song_id VARCHAR(50) PRIMARY KEY,
+    
+    -- 基础信息（来自数据处理器）
+    song_name NVARCHAR(500),
+    artists NVARCHAR(450),
+    album NVARCHAR(500),
+    duration_ms INT,
+    genre NVARCHAR(200),
+    popularity FLOAT DEFAULT 0.0,          -- 原始流行度
+    language NVARCHAR(50),
+    publish_year INT,
+    
+    -- 统计特征（来自数据处理器）
+    tag_score_mean FLOAT NULL,
+    tag_count INT NULL,
+    avg_sentiment FLOAT NULL,
+    comment_count INT NULL,
+    total_likes INT NULL,
+    avg_similarity FLOAT NULL,
+    max_similarity FLOAT NULL,
+    similar_songs_count INT NULL,
+    playlist_count INT NULL,
+    avg_playlist_order FLOAT NULL,
+    
+    -- 音频特征（来自数据处理器）
+    danceability FLOAT DEFAULT 0.5,
+    energy FLOAT DEFAULT 0.5,
+    [key] INT NULL,                        -- SQL关键字需加方括号
+    loudness FLOAT NULL,
+    mode INT NULL,
+    speechiness FLOAT DEFAULT 0,
+    acousticness FLOAT DEFAULT 0,          -- 注意拼写正确
+    instrumentalness FLOAT DEFAULT 0,
+    liveness FLOAT DEFAULT 0,
+    valence FLOAT DEFAULT 0.5,
+    tempo FLOAT DEFAULT 120,
+    time_signature INT DEFAULT 4,
+    
+    -- 衍生特征（来自数据处理器）
+    song_age INT NULL,
+    duration_minutes FLOAT NULL,
+    popularity_group NVARCHAR(50) NULL,
+    energy_dance FLOAT NULL,
+    mood_score FLOAT NULL,
+    
+    -- 对齐增强阶段计算的特征（推荐系统必需）
+    final_popularity FLOAT NULL,           -- 加权流行度
+    final_popularity_norm FLOAT NULL,      -- 归一化值(0-1)
+    recency_score FLOAT NULL,              -- 新鲜度分数
+    genre_clean NVARCHAR(200) NULL,        -- 清洗后的流派
+    popularity_tier NVARCHAR(50) NULL,     -- 分层：hit/popular/normal
+    
+    created_at DATETIME DEFAULT GETDATE(),
+    updated_at DATETIME DEFAULT GETDATE()
+);
+
+-- 2. 用户特征表（对应 enhanced_user_features.csv）
+CREATE TABLE enhanced_user_features (
+    user_id VARCHAR(50) PRIMARY KEY,
+    nickname NVARCHAR(100),
+    gender INT NULL,                       -- 允许NULL（数据处理器可能填充前为空）
+    age INT NULL,                          -- 允许NULL
+    province NVARCHAR(50),
+    city NVARCHAR(50),
+    listen_songs INT DEFAULT 0,
+    source VARCHAR(20),                    -- internal/external
+    
+    -- 行为统计特征（interaction_matrix计算得出）
+    unique_songs INT DEFAULT 0,
+    total_interactions INT DEFAULT 0,
+    total_weight_sum FLOAT DEFAULT 0.0,
+    avg_weight FLOAT DEFAULT 0.0,
+    weight_std FLOAT NULL,                 -- 保留！单个交互时为NULL
+    
+    -- 衍生特征
+    age_group NVARCHAR(50) NULL,
+    activity_level NVARCHAR(50) NULL,
+    diversity_ratio FLOAT DEFAULT 0.0,
+    
+    -- 对齐阶段计算的偏好特征
+    top_genre_1 NVARCHAR(200) NULL,
+    top_genre_2 NVARCHAR(200) NULL,
+    top_genre_3 NVARCHAR(200) NULL,
+    avg_popularity_pref FLOAT NULL,        -- 用户平均流行度偏好
+    popularity_bias FLOAT NULL,            -- 偏好偏差
+    
+    created_at DATETIME DEFAULT GETDATE(),
+    updated_at DATETIME DEFAULT GETDATE()
+);
+
+-- 3. 交互矩阵表（对应 filtered_interactions.csv）
+CREATE TABLE filtered_interactions (
+    interaction_id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id VARCHAR(50) NOT NULL,
+    song_id VARCHAR(50) NOT NULL,
+    total_weight FLOAT DEFAULT 0.0,
+    interaction_types NVARCHAR(200),       -- 如: play,like,collect,play,like
+    
+    created_at DATETIME DEFAULT GETDATE(),
+    
+    FOREIGN KEY (user_id) REFERENCES enhanced_user_features(user_id),
+    FOREIGN KEY (song_id) REFERENCES enhanced_song_features(song_id)
+);
+
+-- 4. 训练集表（对应 train_interactions.csv）
+CREATE TABLE train_interactions (
+    train_id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id VARCHAR(50) NOT NULL,
+    song_id VARCHAR(50) NOT NULL,
+    total_weight FLOAT DEFAULT 0.0,
+    interaction_types NVARCHAR(200),
+    
+    created_at DATETIME DEFAULT GETDATE(),
+    
+    FOREIGN KEY (user_id) REFERENCES enhanced_user_features(user_id),
+    FOREIGN KEY (song_id) REFERENCES enhanced_song_features(song_id)
+);
+
+-- 5. 测试集表（对应 test_interactions.csv）
+CREATE TABLE test_interactions (
+    test_id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id VARCHAR(50) NOT NULL,
+    song_id VARCHAR(50) NOT NULL,
+    total_weight FLOAT DEFAULT 0.0,
+    interaction_types NVARCHAR(200),
+    
+    created_at DATETIME DEFAULT GETDATE(),
+    
+    FOREIGN KEY (user_id) REFERENCES enhanced_user_features(user_id),
+    FOREIGN KEY (song_id) REFERENCES enhanced_song_features(song_id)
+);
+
+-- 6. 推荐结果表（开题报告要求，存储计算好的推荐供Flask查询）
+CREATE TABLE recommendations (
+    recommendation_id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id VARCHAR(50) NOT NULL,
+    song_id VARCHAR(50) NOT NULL,
+    recommendation_score FLOAT DEFAULT 0.0,
+    algorithm_type VARCHAR(50),            -- 'itemcf', 'content', 'mf', 'hybrid', 'cold'
+    rank_position INT DEFAULT 0,           -- 推荐列表中的排序1-10
+    
+    -- 用于评估的反馈字段
+    is_viewed BIT DEFAULT 0,               -- 是否被用户查看
+    is_clicked BIT DEFAULT 0,              -- 是否被点击
+    is_listened BIT DEFAULT 0,             -- 是否播放超过30秒
+    
+    created_at DATETIME DEFAULT GETDATE(),
+    expires_at DATETIME NULL,              -- 推荐过期时间（缓存策略）
+    
+    FOREIGN KEY (user_id) REFERENCES enhanced_user_features(user_id),
+    FOREIGN KEY (song_id) REFERENCES enhanced_song_features(song_id),
+    
+    -- 防止同一时刻重复推荐
+    CONSTRAINT UQ_recommendation UNIQUE(user_id, song_id, created_at)
+);
+
+-- 7. 原始行为日志表（开题报告user_song_interaction，可选，用于追溯）
+CREATE TABLE user_song_interaction (
+    interaction_id INT IDENTITY(1,1) PRIMARY KEY,
+    user_id VARCHAR(50) NOT NULL,
+    song_id VARCHAR(50) NOT NULL,
+    behavior_type VARCHAR(20),             -- play, like, collect, skip
+    [weight] FLOAT DEFAULT 1.0,            -- 权重值，关键字需加括号
+    [timestamp] DATETIME DEFAULT GETDATE(),
+    
+    FOREIGN KEY (user_id) REFERENCES enhanced_user_features(user_id),
+    FOREIGN KEY (song_id) REFERENCES enhanced_song_features(song_id)
+);
+
+-- 创建索引（提升查询性能）
+-- 歌曲表索引
+CREATE INDEX idx_songs_genre ON enhanced_song_features(genre);
+CREATE INDEX idx_songs_genre_clean ON enhanced_song_features(genre_clean);
+CREATE INDEX idx_songs_popularity ON enhanced_song_features(final_popularity);
+CREATE INDEX idx_songs_tier ON enhanced_song_features(popularity_tier);
+CREATE INDEX idx_songs_artists ON enhanced_song_features(artists);
+
+-- 用户表索引
+CREATE INDEX idx_users_age ON enhanced_user_features(age);
+CREATE INDEX idx_users_gender ON enhanced_user_features(gender);
+CREATE INDEX idx_users_activity ON enhanced_user_features(activity_level);
+CREATE INDEX idx_users_source ON enhanced_user_features(source);
+
+-- 交互表索引（推荐系统频繁按用户查询）
+CREATE INDEX idx_interactions_user ON filtered_interactions(user_id);
+CREATE INDEX idx_interactions_song ON filtered_interactions(song_id);
+CREATE INDEX idx_interactions_user_song ON filtered_interactions(user_id, song_id);
+
+-- 训练/测试集索引
+CREATE INDEX idx_train_user ON train_interactions(user_id);
+CREATE INDEX idx_test_user ON test_interactions(user_id);
+
+-- 推荐结果索引（Flask服务查询用）
+CREATE INDEX idx_recommendations_user ON recommendations(user_id, created_at);
+CREATE INDEX idx_recommendations_created ON recommendations(created_at);
+
+GO
+
+-- 查看最新推荐
+SELECT TOP 10 * FROM recommendations ORDER BY created_at DESC;
+
+-- 统计今天保存的推荐
+SELECT 
+    user_id, 
+    COUNT(*) as rec_count,
+    MAX(created_at) as last_time
+FROM recommendations 
+WHERE CAST(created_at AS DATE) = CAST(GETDATE() AS DATE)
+GROUP BY user_id
+ORDER BY rec_count DESC;
+
+-- 1. 查看最新推荐详情（联表查询歌曲信息）
+SELECT TOP 10 
+    r.user_id,
+    r.song_id,
+    s.song_name,
+    s.artists,
+    s.genre_clean,
+    r.recommendation_score,
+    r.rank_position,
+    r.algorithm_type,
+    r.created_at
+FROM recommendations r
+JOIN enhanced_song_features s ON r.song_id = s.song_id
+WHERE r.user_id = 'user_00018449'  -- 您测试的高活跃用户
+ORDER BY r.rank_position;
+
+-- 2. 统计各用户推荐数量分布
+SELECT 
+    rec_count,
+    COUNT(*) as user_count
+FROM (
+    SELECT user_id, COUNT(*) as rec_count
+    FROM recommendations
+    WHERE CAST(created_at AS DATE) = CAST(GETDATE() AS DATE)
+    GROUP BY user_id
+) t
+GROUP BY rec_count
+ORDER BY rec_count;
+
+-- 3. 查看推荐结果质量（流派分布）- 修复版
+SELECT 
+    s.genre_clean,
+    COUNT(*) as rec_count,
+    AVG(r.recommendation_score) as avg_score
+FROM recommendations r
+JOIN enhanced_song_features s ON r.song_id = s.song_id
+WHERE CAST(r.created_at AS DATE) = CAST(GETDATE() AS DATE)  -- 改为 r.created_at
+GROUP BY s.genre_clean
+ORDER BY rec_count DESC;
+
+--修复genre为NULL的问题
+-- 第一步：确认genre字段有数据（应该显示华语流行、欧美流行等）
+SELECT TOP 5 song_id, song_name, genre 
+FROM enhanced_song_features;
+
+-- 第二步：更新genre_clean（基于热门流派分布）
+WITH GenreStats AS (
+    SELECT genre, COUNT(*) as cnt,
+           ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC) as rn
+    FROM enhanced_song_features
+    WHERE genre IS NOT NULL AND genre <> ''
+    GROUP BY genre
+),
+TopGenres AS (
+    SELECT genre FROM GenreStats WHERE rn <= 12  -- 保留前12热门流派
+)
+UPDATE s
+SET genre_clean = 
+    CASE 
+        WHEN s.genre IN (SELECT genre FROM TopGenres) THEN s.genre
+        WHEN s.genre IS NULL OR s.genre = '' THEN 'unknown'
+        ELSE 'other'
+    END
+FROM enhanced_song_features s
+WHERE s.genre_clean IS NULL OR s.genre_clean = '';
+
+-- 第三步：验证修复结果
+SELECT 
+    genre_clean,
+    COUNT(*) as song_count
+FROM enhanced_song_features
+GROUP BY genre_clean
+ORDER BY song_count DESC;
+
+-- 第四步：重新查询推荐结果的流派分布（应该正常了）
+SELECT 
+    s.genre_clean,
+    COUNT(*) as rec_count,
+    AVG(r.recommendation_score) as avg_score
+FROM recommendations r
+JOIN enhanced_song_features s ON r.song_id = s.song_id
+WHERE CAST(r.created_at AS DATE) = CAST(GETDATE() AS DATE)
+GROUP BY s.genre_clean
+ORDER BY rec_count DESC;
