@@ -7,7 +7,6 @@ from logging.handlers import RotatingFileHandler
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
-from werkzeug.exceptions import HTTPException
 
 # 导入配置（包括所有配置类）
 from config import (
@@ -67,23 +66,24 @@ def create_app(config_name: str = None):
     
     # CORS - 更宽松的配置
     CORS(app, resources={
-        r"/*": {
-            "origins": "*",
+        r"/api/*": {
+            "origins": ["http://localhost:8000", "http://127.0.0.1:8000", "http://localhost:5000"],
             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"]
+            "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+            "supports_credentials": True
         }
     })
     
     # 处理OPTIONS请求的中间件
-    @app.before_request
-    def handle_options_request():
-        if request.method == 'OPTIONS':
-            resp = app.make_default_options_response()
-            headers = resp.headers
-            headers['Access-Control-Allow-Origin'] = '*'
-            headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-            headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
-            return resp
+    # @app.before_request
+    # def handle_options_request():
+        #if request.method == 'OPTIONS':
+           # resp = app.make_default_options_response()
+           # headers = resp.headers
+           # headers['Access-Control-Allow-Origin'] = '*'
+           # headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+           # headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+           # return resp
     
     # 注册蓝图
     from routes import recommendation, user, song
@@ -91,6 +91,7 @@ def create_app(config_name: str = None):
     app.register_blueprint(song.bp, url_prefix='/api/v1/songs')
     app.register_blueprint(user.bp, url_prefix='/api/v1/users')
     
+
     # 错误处理
     register_error_handlers(app)
     

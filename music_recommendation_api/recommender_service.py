@@ -316,22 +316,19 @@ class RecommenderService:
     
     get_user_profile = get_user_profile_cached
     
-    def get_recommendations(self, user_id: str, n: int = 10, 
-                          algorithm: str = 'hybrid') -> List[Dict]:
+    def get_recommendations(self, user_id, n=10, algorithm='hybrid'):
         """
-        获取推荐列表 - 生产级容错版本
-        策略：
-        1. 正常用户 -> 个性化推荐
-        2. 冷启动用户 -> 分层热门推荐  
-        3. 引擎故障 -> 兜底热门推荐
-        4. 完全故障 -> 静态缓存推荐
+        获取推荐列表 - 生产级容错版本（带音频优先级后处理）
         """
         # 确保初始化
-        self._check_initialized()
+        if self._status != InitStatus.INITIALIZED and self._status != InitStatus.DEGRADED:
+            if not self.initialize():
+                raise RuntimeError("推荐系统初始化失败")
         
         try:
+            # 【修改】使用带音频优先级的方法，但算法逻辑本身没变
             return self._circuit_breaker.call(
-                self._get_recommendations_internal,
+                self.get_recommendations_with_audio_priority,
                 user_id, n, algorithm
             )
         except Exception as e:
@@ -388,6 +385,55 @@ class RecommenderService:
             results = self._fill_with_hot_songs(results, n)
         
         return results
+    def get_recommendations_with_audio_priority(self, user_id, n=10, algorithm='hybrid'):
+        """
+        获取推荐，优先返回有音频文件的歌曲（后处理排序，不修改算法分数）
+        """
+        from datetime import datetime
+        
+        # 1. 获取正常推荐（使用原始算法逻辑，多取一些作为候选池）
+        # 注意：_get_recommendations_internal 返回的是字典列表，不是元组列表！
+        candidates = self._get_recommendations_internal(user_id, n=n*3, algorithm=algorithm)
+        
+        if not candidates:
+            return self._get_fallback_recommendations(n)
+        
+        # 2. 查询这些候选歌曲中哪些有音频（仅用于排序，不改变算法权重）
+        try:
+            song_ids = [c['song_id'] for c in candidates]  # 从字典中提取 song_id
+            # 分批查询避免SQL过长
+            audio_songs = set()
+            batch_size = 100
+            for i in range(0, len(song_ids), batch_size):
+                batch = song_ids[i:i+batch_size]
+                placeholders = ','.join([f"'{sid}'" for sid in batch])
+                query = text(f"""
+                    SELECT song_id 
+                    FROM enhanced_song_features 
+                    WHERE song_id IN ({placeholders}) 
+                    AND track_id IS NOT NULL
+                """)
+                
+                with self._engine.connect() as conn:
+                    result = conn.execute(query)
+                    audio_songs.update({row[0] for row in result})
+        except Exception as e:
+            logger.warning(f"查询音频状态失败: {e}")
+            audio_songs = set()
+        
+        # 3. 后处理排序：有音频的排在前面，但保持算法内部的相对顺序
+        # 注意：candidates 是字典列表，不是元组列表！
+        with_audio = [c for c in candidates if c['song_id'] in audio_songs]
+        without_audio = [c for c in candidates if c['song_id'] not in audio_songs]
+        
+        # 组合：先排有音频的（按原算法分数排序），再补无音频的
+        final_candidates = (with_audio + without_audio)[:n]
+        
+        # 4. 添加 has_audio 标记（因为前端需要这个字段）
+        for c in final_candidates:
+            c['has_audio'] = c['song_id'] in audio_songs
+        
+        return final_candidates
     
     def _get_normal_recommendations(self, user_id: str, n: int, 
                                 algorithm: str, profile: Dict) -> List[Tuple]:

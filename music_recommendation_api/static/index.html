@@ -42,6 +42,7 @@
                         <input type="text" id="user-id-input" placeholder="输入用户ID (例如: 12345)" value="1001">
                         <div class="search-controls">
                             <select id="algorithm-select">
+                                <option value="diverse">多样性推荐 (MMR)</option>
                                 <option value="hybrid">混合推荐</option>
                                 <option value="usercf">用户协同过滤</option>
                                 <option value="cf">物品协同过滤</option>
@@ -53,6 +54,11 @@
                                 <i class="fas fa-search"></i> 获取推荐
                             </button>
                         </div>
+                    </div>
+                    <div class="user-actions" style="margin-top: 1rem;">
+                        <button class="btn btn-secondary" onclick="showRegisterModal()">
+                            <i class="fas fa-user-plus"></i> 新用户注册
+                        </button>
                     </div>
                     <div class="stats">
                         <div class="stat-card">
@@ -79,7 +85,7 @@
                     </div>
                 </div>
                 <div class="hero-image">
-                    <div class="music-visualizer">
+                    <div class="music-visualizer" id="realtime-visualizer">
                         <div class="bar"></div>
                         <div class="bar"></div>
                         <div class="bar"></div>
@@ -110,7 +116,7 @@
         <!-- 推荐结果区域 -->
         <section id="recommendations" class="section">
             <div class="section-header">
-                <h2 class="section-title">个性化推荐</h2>
+                <h2 class="section-title" id="rec-title">个性化推荐</h2>
                 <div class="recommendation-info">
                     <span class="user-id-display">用户ID: <span id="current-user-id">-</span></span>
                     <span class="algorithm-display">算法: <span id="current-algorithm">-</span></span>
@@ -131,6 +137,7 @@
                 <div class="control-group">
                     <label for="rec-algorithm-select">推荐算法:</label>
                     <select id="rec-algorithm-select">
+                        <option value="diverse">多样性推荐 (MMR)</option>
                         <option value="hybrid" selected>混合推荐</option>
                         <option value="usercf">用户协同过滤</option>
                         <option value="cf">物品协同过滤</option>
@@ -142,9 +149,12 @@
                 <button id="refresh-recommendations" class="btn btn-primary">
                     <i class="fas fa-sync-alt"></i> 刷新推荐
                 </button>
+                <button class="btn btn-secondary" onclick="toggleABTest()">
+                    <i class="fas fa-flask"></i> <span id="ab-test-btn-text">A/B测试对比</span>
+                </button>
             </div>
-            
-            <!-- 用户画像 -->
+
+                        <!-- 用户画像 -->
             <div id="user-profile-card" class="profile-card">
                 <div class="profile-header">
                     <i class="fas fa-user-circle"></i>
@@ -172,12 +182,54 @@
                 </div>
             </div>
             
-            <!-- 推荐结果 -->
+            <!-- 正常推荐容器 -->
             <div id="recommendations-container" class="songs-grid">
-                <!-- 推荐结果会动态加载到这里 -->
                 <div class="empty-state">
                     <i class="fas fa-music"></i>
                     <p>还没有推荐结果，请输入用户ID并点击"获取推荐"</p>
+                </div>
+            </div>
+            
+            <!-- A/B测试容器（默认隐藏） -->
+            <div id="ab-test-container" style="display: none;">
+                <div class="ab-comparison-header">
+                    <div class="ab-intro">
+                        <i class="fas fa-balance-scale"></i>
+                        <span>盲测对比：哪个推荐列表更符合您的口味？</span>
+                    </div>
+                    <div class="ab-vote-buttons">
+                        <button class="btn btn-vote btn-vote-a" onclick="voteABTest('a')">
+                            <i class="fas fa-check"></i> 左边更好
+                        </button>
+                        <button class="btn btn-vote btn-vote-tie" onclick="voteABTest('tie')">
+                            <i class="fas fa-equals"></i> 差不多
+                        </button>
+                        <button class="btn btn-vote btn-vote-b" onclick="voteABTest('b')">
+                            <i class="fas fa-check"></i> 右边更好
+                        </button>
+                    </div>
+                </div>
+                <div class="ab-columns-container">
+                    <div class="ab-column">
+                        <div class="ab-column-header algorithm-a">
+                            <div class="algo-icon"><i class="fas fa-robot"></i></div>
+                            <div>
+                                <h4>算法 A</h4>
+                                <span class="algo-desc">混合推荐 (Hybrid)</span>
+                            </div>
+                        </div>
+                        <div id="ab-column-a" class="songs-grid compact"></div>
+                    </div>
+                    <div class="ab-column">
+                        <div class="ab-column-header algorithm-b">
+                            <div class="algo-icon"><i class="fas fa-project-diagram"></i></div>
+                            <div>
+                                <h4>算法 B</h4>
+                                <span class="algo-desc">协同过滤 (CF)</span>
+                            </div>
+                        </div>
+                        <div id="ab-column-b" class="songs-grid compact"></div>
+                    </div>
                 </div>
             </div>
             
@@ -209,9 +261,9 @@
             <div id="explore-container" class="songs-grid">
                 <!-- 探索结果会动态加载到这里 -->
             </div>
-            
-            <!-- 加载更多 -->
-            <div class="load-more-container">
+
+            <!-- 【修改】初始隐藏，只有需要时才显示 -->
+            <div id="explore-load-more" class="load-more-container" style="display: none;">
                 <button id="load-more-btn" class="btn btn-secondary">
                     <i class="fas fa-plus"></i> 加载更多
                 </button>
@@ -237,6 +289,10 @@
                         <p id="total-listens">-</p>
                     </div>
                     <div class="profile-stat">
+                        <h4>交互次数</h4>
+                        <p id="total-interactions">-</p>
+                    </div>
+                    <div class="profile-stat">
                         <h4>偏好流派</h4>
                         <p id="fav-genre">-</p>
                     </div>
@@ -247,6 +303,10 @@
                     <div class="profile-stat">
                         <h4>活跃等级</h4>
                         <p id="activity-level">-</p>
+                    </div>
+                    <div class="profile-stat">
+                        <h4>多样性</h4>
+                        <p id="diversity-ratio">-</p>
                     </div>
                 </div>
                 
@@ -295,6 +355,9 @@
 
     <!-- 播放器控件 -->
     <div class="player-container">
+        <div class="visualizer-container">
+            <canvas id="audio-visualizer" width="600" height="100"></canvas>
+        </div>
         <div class="player-info">
             <div class="now-playing">
                 <div class="album-art">
@@ -322,6 +385,24 @@
                 <i class="fas fa-volume-up"></i>
                 <input type="range" id="volume-slider" min="0" max="100" value="80">
             </div>
+            <!-- 播放列表面板 -->
+            <div class="playlist-panel" id="playlist-panel">
+                <div class="playlist-header">
+                    <h4>播放列表 <span id="playlist-title-count">(0首)</span></h4>
+                    <button class="btn-icon" onclick="togglePlaylist()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="playlist-body" id="playlist-body">
+                    <!-- 动态生成 -->
+                </div>
+            </div>
+
+            <!-- 播放列表按钮 -->
+            <button class="player-btn playlist-toggle-btn" onclick="togglePlaylist()" title="播放列表">
+                <i class="fas fa-list-ul"></i>
+                <span class="playlist-count" id="playlist-count">0</span>
+            </button>
         </div>
     </div>
 
@@ -449,5 +530,97 @@
     </footer>
 
     <script src="script.js"></script>
+    <!-- 注册模态框 - 美化版本 -->
+    <div id="register-modal" class="modal">
+        <div class="modal-content" style="max-width: 480px; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+            <div class="modal-header" style="background: linear-gradient(135deg, var(--primary-color), var(--secondary-color)); color: white; padding: 1.5rem;">
+                <h3 style="margin: 0; font-size: 1.4rem; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fas fa-user-plus"></i>
+                    新用户注册
+                </h3>
+                <button class="close-modal" style="color: rgba(255,255,255,0.8); font-size: 1.8rem; background: none; border: none; cursor: pointer; transition: all 0.2s;">
+                    &times;
+                </button>
+            </div>
+            
+            <div class="modal-body" style="padding: 2rem;">
+                <form id="register-form" style="display: flex; flex-direction: column; gap: 1.2rem;">
+                    
+                    <!-- 用户ID生成 -->
+                    <div class="form-group" style="background: var(--bg-primary); padding: 1rem; border-radius: 12px; border: 1px solid var(--border-color);">
+                        <label style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.3rem; font-weight: 500;">
+                            用户ID（系统自动生成）
+                        </label>
+                        <div style="display: flex; gap: 0.8rem; align-items: center;">
+                            <input type="text" id="reg-user-id" readonly style="flex: 1; padding: 0.6rem; border: 1px solid var(--border-color); border-radius: 8px; background: white; font-family: monospace; font-size: 0.9rem; color: var(--primary-color); font-weight: 600;">
+                            <button type="button" onclick="generateUserId()" class="btn-icon" style="padding: 0.6rem 1rem; background: var(--primary-color); color: white; border: none; border-radius: 8px; cursor: pointer; display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; transition: all 0.2s;">
+                                <i class="fas fa-sync-alt"></i>
+                                刷新
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 昵称 -->
+                    <div class="form-group">
+                        <label style="display: block; font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.4rem; font-weight: 500;">
+                            昵称 <span style="color: var(--accent-color);">*</span>
+                        </label>
+                        <div style="position: relative;">
+                            <i class="fas fa-user" style="position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: var(--text-secondary);"></i>
+                            <input type="text" id="reg-nickname" required placeholder="请输入您的昵称" style="width: 100%; padding: 0.8rem 1rem 0.8rem 2.5rem; border: 2px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); font-size: 1rem; transition: all 0.3s; outline: none;">
+                        </div>
+                    </div>
+
+                    <!-- 性别和年龄并列 -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                        <div class="form-group">
+                            <label style="display: block; font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.4rem; font-weight: 500;">性别</label>
+                            <div style="position: relative;">
+                                <i class="fas fa-venus-mars" style="position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: var(--text-secondary);"></i>
+                                <select id="reg-gender" style="width: 100%; padding: 0.8rem 1rem 0.8rem 2.5rem; border: 2px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); font-size: 1rem; cursor: pointer; outline: none;">
+                                    <option value="">保密</option>
+                                    <option value="1">男</option>
+                                    <option value="2">女</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label style="display: block; font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.4rem; font-weight: 500;">年龄</label>
+                            <div style="position: relative;">
+                                <i class="fas fa-birthday-cake" style="position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: var(--text-secondary);"></i>
+                                <input type="number" id="reg-age" min="12" max="80" placeholder="18" style="width: 100%; padding: 0.8rem 1rem 0.8rem 2.5rem; border: 2px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); font-size: 1rem; outline: none;">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 省份城市 -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                        <div class="form-group">
+                            <label style="display: block; font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.4rem; font-weight: 500;">省份</label>
+                            <div style="position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: var(--text-secondary);"></div>
+                            <input type="text" id="reg-province" placeholder="省份" style="width: 100%; padding: 0.8rem 1rem; border: 2px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); font-size: 1rem; outline: none;">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label style="display: block; font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.4rem; font-weight: 500;">城市</label>
+                            <input type="text" id="reg-city" placeholder="城市" style="width: 100%; padding: 0.8rem 1rem; border: 2px solid var(--border-color); border-radius: 10px; background: var(--bg-card); color: var(--text-primary); font-size: 1rem; outline: none;">
+                        </div>
+                    </div>
+
+                    <!-- 提交按钮 -->
+                    <button type="submit" class="btn btn-primary" style="width: 100%; padding: 1rem; margin-top: 0.5rem; font-size: 1rem; font-weight: 600; border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 0.5rem; box-shadow: 0 4px 12px rgba(67, 97, 238, 0.3);">
+                        <i class="fas fa-user-check"></i>
+                        注册并获取个性化推荐
+                    </button>
+                    
+                    <p style="text-align: center; font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.5rem;">
+                        <i class="fas fa-info-circle"></i>
+                        注册后将自动为您生成冷启动推荐
+                    </p>
+                </form>
+            </div>
+        </div>
+    </div>
 </body>
 </html>

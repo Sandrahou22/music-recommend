@@ -1,37 +1,193 @@
 from flask import Blueprint, request
 from utils.response import success, error
-from config import Config
+from sqlalchemy import text  # 添加这行
 from recommender_service import recommender_service
+import logging
+logger = logging.getLogger(__name__)
 
 bp = Blueprint('user', __name__)
 
+# user.py 中的 get_user_profile 函数修正
 @bp.route('/<user_id>/profile', methods=['GET'])
 def get_user_profile(user_id):
-    """获取用户画像"""
+    """获取用户画像（包含所有统计字段）"""
     try:
+        logger.info(f"获取用户画像 | user={user_id}")
+        
+        # 先从推荐服务获取（内存缓存）
         profile = recommender_service.get_user_profile(user_id)
+        
         if profile:
-            return success(profile)
-        else:
-            # 用户不存在，返回默认画像
+            logger.info(f"命中内存缓存 | user={user_id}")
             return success({
-                "user_id": user_id,
-                "n_songs": 0,
-                "top_genres": [],
-                "popularity_bias": 0,
-                "avg_popularity": 50,
-                "is_cold_start": True
+                "user_id": profile.get('user_id', user_id),
+                "n_songs": int(profile.get('n_songs', 0)),
+                "total_interactions": int(profile.get('total_interactions', 0)),
+                "top_genres": profile.get('top_genres', []),
+                "avg_popularity": float(profile.get('avg_popularity', 50)),
+                "activity_level": profile.get('activity_level', '普通用户'),
+                "diversity_ratio": float(profile.get('diversity_ratio', 0.5) if profile.get('diversity_ratio') else 0.5),
+                "is_cold_start": profile.get('is_cold_start', False)
             })
+        
+        # 如果内存中没有，从数据库查
+        logger.info(f"缓存未命中，查询数据库 | user={user_id}")
+        engine = recommender_service._engine
+        
+        # 确保SQL字段名与数据库表结构完全匹配
+        query = """
+        SELECT 
+            user_id,
+            nickname,
+            ISNULL(unique_songs, 0) as n_songs,
+            ISNULL(total_interactions, 0) as total_interactions,
+            ISNULL(avg_popularity_pref, 50) as avg_popularity,
+            ISNULL(top_genre_1, '') as top_genre_1,
+            ISNULL(top_genre_2, '') as top_genre_2,
+            ISNULL(top_genre_3, '') as top_genre_3,
+            ISNULL(activity_level, '普通用户') as activity_level,
+            ISNULL(diversity_ratio, 0.5) as diversity_ratio
+        FROM enhanced_user_features 
+        WHERE user_id = :user_id
+        """
+        
+        # 【关键修复】使用正确的连接方式
+        with engine.connect() as conn:
+            result = conn.execute(text(query), {"user_id": user_id}).fetchone()
+            
+            if result:
+                genres = [g for g in [result.top_genre_1, result.top_genre_2, result.top_genre_3] if g]
+                
+                # 【关键修复】确保所有类型转换正确处理NULL
+                n_songs = int(result.n_songs) if result.n_songs is not None else 0
+                total_interactions = int(result.total_interactions) if result.total_interactions is not None else 0
+                avg_popularity = float(result.avg_popularity) if result.avg_popularity is not None else 50.0
+                diversity_ratio = float(result.diversity_ratio) if result.diversity_ratio is not None else 0.5
+                
+                logger.info(f"数据库查询成功 | user={user_id}, n_songs={n_songs}")
+                
+                return success({
+                    "user_id": str(result.user_id),
+                    "n_songs": n_songs,
+                    "total_interactions": total_interactions,
+                    "avg_popularity": avg_popularity,
+                    "top_genres": genres,
+                    "activity_level": str(result.activity_level) if result.activity_level else '普通用户',
+                    "diversity_ratio": diversity_ratio,
+                    "is_cold_start": n_songs < 5
+                })
+            else:
+                logger.warning(f"用户不存在 | user={user_id}")
+                return error(message="用户不存在", code=404)
+                
     except Exception as e:
+        logger.error(f"获取用户画像失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return error(message=str(e), code=500)
+
+def _calculate_activity_level(n_songs):
+    """根据听歌数量计算活跃等级"""
+    if n_songs > 100:
+        return "高活跃"
+    elif n_songs > 50:
+        return "中活跃"
+    elif n_songs > 10:
+        return "普通用户"
+    else:
+        return "新用户"
 
 @bp.route('/<user_id>/history', methods=['GET'])
 def get_user_history(user_id):
-    """获取用户历史收听"""
+    """获取用户历史收听记录"""
     try:
-        n = request.args.get('n', 10, type=int)
-        # 这里可以调用推荐服务的获取历史方法
-        # 暂时返回空列表
-        return success([])
+        n = request.args.get('n', 20, type=int)
+        
+        engine = recommender_service._engine
+        
+        # SQL Server参数绑定使用 :param 而不是 %s 或 ?
+        query = text("""
+        SELECT TOP (:n)
+            fi.song_id,
+            fi.total_weight,
+            fi.interaction_types,
+            fi.created_at,
+            ef.song_name,
+            ef.artists,
+            ef.genre
+        FROM filtered_interactions fi
+        JOIN enhanced_song_features ef ON fi.song_id = ef.song_id
+        WHERE fi.user_id = :user_id
+        ORDER BY fi.created_at DESC
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(query, {"user_id": user_id, "n": n})
+            history = []
+            for row in result:
+                history.append({
+                    "song_id": row.song_id,
+                    "song_name": row.song_name,
+                    "artists": row.artists,
+                    "genre": row.genre,
+                    "weight": float(row.total_weight) if row.total_weight else 0,
+                    "interaction_types": row.interaction_types,
+                    "timestamp": row.created_at.isoformat() if row.created_at else None
+                })
+            
+            return success(history)
+            
     except Exception as e:
+        logger.error(f"获取用户历史记录失败: {e}")
+        return error(message=str(e), code=500)
+    
+@bp.route('/register', methods=['POST'])
+def register_user():
+    """新用户注册"""
+    try:
+        data = request.get_json()
+        
+        # 验证必填
+        if not data.get('user_id') or not data.get('nickname'):
+            return error(message="用户ID和昵称为必填项", code=400)
+        
+        # 检查用户是否存在
+        engine = recommender_service._engine
+        
+        with engine.connect() as conn:
+            check = conn.execute(
+                text("SELECT 1 FROM enhanced_user_features WHERE user_id = :id"),
+                {"id": data['user_id']}
+            ).fetchone()
+            
+            if check:
+                return error(message="用户ID已存在", code=400)
+        
+        # 【关键修复】使用 engine.begin() 进行事务
+        with engine.begin() as conn:
+            insert_query = """
+            INSERT INTO enhanced_user_features 
+            (user_id, nickname, gender, age, province, city, source, activity_level)
+            VALUES 
+            (:user_id, :nickname, :gender, :age, :province, :city, :source, '新用户')
+            """
+            
+            conn.execute(text(insert_query), {
+                "user_id": data['user_id'],
+                "nickname": data['nickname'],
+                "gender": data.get('gender'),
+                "age": data.get('age'),
+                "province": data.get('province', ''),
+                "city": data.get('city', ''),
+                "source": data.get('source', 'internal')
+            })
+            # 不需要手动commit，engine.begin()会自动提交
+        
+        logger.info(f"新用户注册成功 | user_id={data['user_id']}")
+        return success(message="注册成功", data={"user_id": data['user_id']})
+        
+    except Exception as e:
+        logger.error(f"用户注册失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return error(message=str(e), code=500)

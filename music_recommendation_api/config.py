@@ -48,25 +48,51 @@ class Config:
     CIRCUIT_BREAKER_TIMEOUT: int = int(os.getenv('CIRCUIT_BREAKER_TIMEOUT', 60))
     
     # SQL Server配置
+    # DB_CONFIG: dict = {
+       # 'server': os.getenv('DB_SERVER', 'localhost'),
+       # 'database': os.getenv('DB_NAME', 'MusicRecommendationDB'),
+       # 'username': os.getenv('DB_USER', 'sa'),
+       # 'password': os.getenv('DB_PASSWORD', '123456'),  # 建议.env覆盖
+       # 'driver': os.getenv('DB_DRIVER', 'ODBC Driver 18 for SQL Server'),
+       # 'encrypt': os.getenv('DB_ENCRYPT', 'no'),
+       # 'pool_size': int(os.getenv('DB_POOL_SIZE', 5)),
+       # 'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', 10)),
+       # 'pool_recycle': int(os.getenv('DB_POOL_RECYCLE', 3600))
+    # }
+    
+     # SQL Server配置 - 使用Windows身份验证
+    # SQL Server配置 - 使用Windows身份验证（无需密码）
     DB_CONFIG: dict = {
-        'server': os.getenv('DB_SERVER', 'localhost'),
+        'server': os.getenv('DB_SERVER', 'localhost'),  # 或 localhost\\SQLEXPRESS
         'database': os.getenv('DB_NAME', 'MusicRecommendationDB'),
-        'username': os.getenv('DB_USER', 'sa'),
-        'password': os.getenv('DB_PASSWORD', '123456'),  # 建议.env覆盖
+        'username': '',  # Windows验证留空
+        'password': '',  # Windows验证留空
         'driver': os.getenv('DB_DRIVER', 'ODBC Driver 18 for SQL Server'),
-        'encrypt': os.getenv('DB_ENCRYPT', 'no'),
+        'trusted_connection': 'yes',  # 关键：使用Windows身份验证
         'pool_size': int(os.getenv('DB_POOL_SIZE', 5)),
         'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', 10)),
         'pool_recycle': int(os.getenv('DB_POOL_RECYCLE', 3600))
     }
     
     @classmethod
+    def get_db_connection_string(cls) -> str:
+        """生成SQL Server连接字符串 - Windows身份验证"""
+        cfg = cls.DB_CONFIG
+        driver = cfg['driver'].replace(' ', '+')
+        
+        # Windows身份验证连接字符串（无需用户名密码）
+        return (f"mssql+pyodbc://@{cfg['server']}/{cfg['database']}"
+                f"?driver={driver}&Trusted_Connection=yes&Encrypt=no&TrustServerCertificate=yes")
+
+    @classmethod
     def validate(cls) -> None:
         """启动时验证配置"""
         errors = []
         
-        if not cls.DB_CONFIG.get('password'):
-            errors.append("DB_PASSWORD 环境变量未设置")
+        # 如果不是 Windows 身份验证，才检查密码
+        if cls.DB_CONFIG.get('trusted_connection') != 'yes':
+            if not cls.DB_CONFIG.get('password'):
+                errors.append("DB_PASSWORD 环境变量未设置（或使用Windows身份验证）")
         
         if not cls.RECOMMENDER_CODE_PATH.exists():
             errors.append(f"推荐系统代码文件不存在: {cls.RECOMMENDER_CODE_PATH}")
@@ -74,14 +100,15 @@ class Config:
         if errors:
             raise ValueError(f"配置验证失败:\n" + "\n".join(f"  - {e}" for e in errors))
     
-    @classmethod
-    def get_db_connection_string(cls) -> str:
-        """生成SQL Server连接字符串"""
-        cfg = cls.DB_CONFIG
-        driver = cfg['driver'].replace(' ', '+')
-        return (f"mssql+pyodbc://{cfg['username']}:{cfg['password']}"
-                f"@{cfg['server']}/{cfg['database']}"
-                f"?driver={driver}&Encrypt={cfg['encrypt']}")
+    # @classmethod
+    # def get_db_connection_string(cls) -> str:
+    #    """生成SQL Server连接字符串"""
+    #    cfg = cls.DB_CONFIG
+    #    driver = cfg['driver'].replace(' ', '+')
+    #    # 添加 TrustServerCertificate=yes 解决驱动18的连接问题
+    #    return (f"mssql+pyodbc://{cfg['username']}:{cfg['password']}"
+    #            f"@{cfg['server']}/{cfg['database']}"
+    #            f"?driver={driver}&Encrypt={cfg['encrypt']}&TrustServerCertificate=yes")
 
 class DevelopmentConfig(Config):
     """开发环境配置"""
