@@ -1,0 +1,97 @@
+文件结构分析结果
+============================================================
+
+歌曲特征 (song_features.csv):
+列数: 36
+字段列表:
+   1. song_id
+   2. song_name
+   3. artists
+   4. album
+   5. duration_ms
+   6. genre
+   7. popularity
+   8. language
+   9. publish_year
+  10. tag_score_mean
+  11. tag_count
+  12. avg_sentiment
+  13. comment_count
+  14. total_likes
+  15. avg_similarity
+  16. max_similarity
+  17. similar_songs_count
+  18. playlist_count
+  19. avg_playlist_order
+  20. danceability
+  21. energy
+  22. key
+  23. loudness
+  24. mode
+  25. speechiness
+  26. acousticness
+  27. instrumentalness
+  28. liveness
+  29. valence
+  30. tempo
+  31. time_signature
+  32. song_age
+  33. duration_minutes
+  34. popularity_group
+  35. energy_dance
+  36. mood_score
+
+----------------------------------------
+
+用户特征 (user_features.csv):
+列数: 16
+字段列表:
+   1. user_id
+   2. nickname
+   3. gender
+   4. age
+   5. province
+   6. city
+   7. listen_songs
+   8. source
+   9. unique_songs
+  10. total_interactions
+  11. total_weight_sum
+  12. avg_weight
+  13. weight_std
+  14. age_group
+  15. activity_level
+  16. diversity_ratio
+
+----------------------------------------
+
+交互矩阵 (interaction_matrix.csv):
+列数: 4
+字段列表:
+   1. user_id
+   2. song_id
+   3. total_weight
+   4. interaction_types
+
+----------------------------------------
+
+训练集 (train_interactions.csv):
+列数: 4
+字段列表:
+   1. user_id
+   2. song_id
+   3. total_weight
+   4. interaction_types
+
+----------------------------------------
+
+测试集 (test_interactions.csv):
+列数: 4
+字段列表:
+   1. user_id
+   2. song_id
+   3. total_weight
+   4. interaction_types
+
+----------------------------------------
+
