@@ -44,19 +44,56 @@ def get_hot_songs():
     try:
         tier = request.args.get('tier', 'all')
         n = request.args.get('n', 20, type=int)
-        n = min(n, 50)
+        n = min(n, 100)
         
-        songs = recommender_service.get_hot_songs(tier=tier, n=n)
+        # 构建查询
+        engine = recommender_service._engine
         
-        if not songs:
-            return success([], message="暂无热门歌曲数据")
-            
+        where_clause = ""
+        if tier == 'hit':
+            where_clause = "WHERE popularity_tier = 'hit'"
+        elif tier == 'popular':
+            where_clause = "WHERE popularity_tier = 'popular'"
+        elif tier == 'normal':
+            where_clause = "WHERE popularity_tier = 'normal'"
+        # all 就不加条件
+        
+        query = text(f"""
+            SELECT TOP {n}
+                song_id, song_name, artists, album, genre,
+                final_popularity as popularity,
+                audio_path,
+                CASE 
+                    WHEN audio_path IS NOT NULL AND audio_path != '' THEN 1 
+                    ELSE 0 
+                END as has_audio
+            FROM enhanced_song_features
+            {where_clause}
+            ORDER BY final_popularity DESC
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(query)
+            songs = [{
+                "song_id": row.song_id,
+                "song_name": row.song_name,
+                "artists": row.artists,
+                "album": row.album,
+                "genre": row.genre,
+                "popularity": int(row.popularity) if row.popularity else 50,
+                "has_audio": bool(row.has_audio)
+            } for row in result]
+        
+        logger.info(f"[热门歌曲] 返回 {len(songs)} 首歌曲，流派: {tier}")
+        
         return success({
             "tier": tier,
             "count": len(songs),
             "songs": songs
         })
+        
     except Exception as e:
+        logger.error(f"获取热门歌曲失败: {e}", exc_info=True)
         return error(message=str(e), code=500)
 
 # 极简流派归一化映射（与前端一致）
@@ -77,7 +114,7 @@ def get_songs_by_genre():
         if not genre_param:
             return error(message="缺少流派参数", code=400)
         
-        # 【关键】解析逗号分隔的多个流派
+        # 解析逗号分隔的多个流派
         source_genres = [g.strip() for g in genre_param.split(',') if g.strip()]
         
         limit = min(request.args.get('limit', 50, type=int), 100)
@@ -85,24 +122,42 @@ def get_songs_by_genre():
         
         engine = recommender_service._engine
         
-        # 【关键】使用 IN 语句匹配多个值
+        # 【新增】获取排序参数
+        sort_by_audio = request.args.get('sort_by_audio', 'true').lower() == 'true'
+        
+        # 【修改】SQL查询，优先返回有音频的歌曲
         placeholders = ', '.join([f"'{g}'" for g in source_genres])
         
-        # 【调试用】打印实际执行的 SQL
-        query = f"""
+        # 构建基础查询
+        base_query = f"""
         SELECT 
             song_id, song_name, artists, album, genre,
             final_popularity as popularity,
-            danceability, energy, valence, tempo
+            danceability, energy, valence, tempo,
+            audio_path,
+            CASE 
+                WHEN audio_path IS NOT NULL AND audio_path != '' THEN 1 
+                ELSE 0 
+            END as has_audio
         FROM enhanced_song_features
         WHERE genre IN ({placeholders})
-        ORDER BY final_popularity DESC
+        """
+        
+        # 【新增】根据参数决定排序方式
+        order_clause = ""
+        if sort_by_audio:
+            order_clause = "ORDER BY has_audio DESC, final_popularity DESC"
+        else:
+            order_clause = "ORDER BY final_popularity DESC"
+        
+        query = f"""
+        {base_query}
+        {order_clause}
         OFFSET {offset} ROWS
         FETCH NEXT {limit} ROWS ONLY
         """
         
-        # 【关键】在日志中输出实际 SQL，方便调试
-        logger.info(f"[流派查询] SQL: WHERE genre IN ({placeholders})")
+        logger.info(f"[流派查询] 排序方式: {'优先有音频' if sort_by_audio else '仅按流行度'}")
         
         with engine.connect() as conn:
             result = conn.execute(text(query))
@@ -113,6 +168,7 @@ def get_songs_by_genre():
                 "album": row.album,
                 "genre": row.genre,
                 "popularity": int(row.popularity) if row.popularity else 50,
+                "has_audio": bool(row.has_audio),
                 "audio_features": {
                     "danceability": float(row.danceability) if row.danceability else 0.5,
                     "energy": float(row.energy) if row.energy else 0.5,
@@ -121,12 +177,16 @@ def get_songs_by_genre():
                 }
             } for row in result]
         
-        logger.info(f"[流派查询] 返回 {len(songs)} 首歌曲")
+        # 【新增】统计信息
+        audio_count = sum(1 for song in songs if song['has_audio'])
+        logger.info(f"[流派查询] 返回 {len(songs)} 首歌曲，其中有音频: {audio_count} 首")
         
         return success({
             "songs": songs,
-            "query_genres": source_genres,  # 返回查询条件方便核对
-            "count": len(songs)
+            "query_genres": source_genres,
+            "count": len(songs),
+            "audio_count": audio_count,
+            "sort_by_audio": sort_by_audio
         })
         
     except Exception as e:
@@ -139,9 +199,16 @@ def get_songs_by_genre():
 @bp.route('/<song_id>/audio', methods=['GET'])
 def get_song_audio(song_id):
     try:
+        logger.info(f"[音频请求] 开始处理歌曲ID: {song_id}")
+        
+        # 获取歌曲信息
         engine = recommender_service._engine
         query = text("""
-            SELECT audio_path, track_id, song_name
+            SELECT audio_path, track_id, song_name, 
+                   CASE 
+                     WHEN audio_path IS NOT NULL AND audio_path != '' THEN 1 
+                     ELSE 0 
+                   END as has_audio
             FROM enhanced_song_features 
             WHERE song_id = :song_id
         """)
@@ -150,45 +217,56 @@ def get_song_audio(song_id):
             result = conn.execute(query, {"song_id": song_id}).fetchone()
             
             if not result:
+                logger.warning(f"[音频请求] 歌曲不存在: {song_id}")
                 return error(message="歌曲不存在", code=404)
+            
+            # 检查是否有音频
+            if not result.has_audio:
+                logger.info(f"[音频请求] 歌曲无音频: {song_id}")
+                return error(message="该歌曲暂无音频文件", code=404)
             
             file_path = result.audio_path
             
-            # 【添加这段调试代码】
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.info(f"[音频调试] song_id={song_id}, 原始路径={file_path}")
+            # 详细的路径检查和日志
+            logger.info(f"[音频请求] 原始路径: {file_path}")
             
-            if not file_path:
-                return error(message="该歌曲暂无音频文件(audio_path为空)", code=404)
+            if not file_path or file_path == '':
+                logger.warning(f"[音频请求] 音频路径为空: {song_id}")
+                return error(message="音频文件路径为空", code=404)
             
-            # 在 song.py 的 get_song_audio 函数中，查询结果后添加：
-            if file_path:
-                logger.info(f"[音频调试] 歌曲 {song_id} 路径: {file_path}, 大小: {os.path.getsize(file_path)} bytes")
-                # 检查是否是真实MP3（简单检查文件头）
-                with open(file_path, 'rb') as f:
-                    header = f.read(4)
-                    is_mp3 = header[:3] == b'ID3' or header[:2] == b'\xff\xfb' or header[:2] == b'\xff\xf3'
-                    logger.info(f"[音频调试] 文件头检测: {header}, 疑似MP3: {is_mp3}")
-
-            # Windows路径处理
-            file_path = os.path.normpath(str(file_path))
-            logger.info(f"[音频调试] 规范化后路径={file_path}, 存在={os.path.exists(file_path)}")
+            # 处理路径（Windows）
+            file_path = str(file_path).strip()
             
-            # 【关键修复】确保路径能被Python正确识别（特别是含中文路径）
+            # 检查文件是否存在
             if not os.path.exists(file_path):
-                # 尝试用原始字符串再次检查（处理反斜杠转义问题）
-                raw_path = str(result.audio_path).replace('\\', '\\\\')
-                logger.info(f"[音频调试] 尝试转义路径: {raw_path}")
-                if not os.path.exists(file_path):
-                    logger.warning(f"音频文件不存在: {file_path}")
-                    return error(message=f"音频文件不存在", code=404)
+                # 尝试多种路径格式
+                possible_paths = [
+                    file_path,
+                    file_path.replace('\\', '/'),
+                    file_path.replace('/', '\\'),
+                    os.path.normpath(file_path),
+                    os.path.abspath(file_path)
+                ]
+                
+                for i, path in enumerate(possible_paths):
+                    logger.info(f"[音频请求] 尝试路径 {i+1}: {path}")
+                    if os.path.exists(path):
+                        file_path = path
+                        logger.info(f"[音频请求] 找到文件: {path}")
+                        break
+                else:
+                    logger.error(f"[音频请求] 所有路径都不存在: {song_id}")
+                    return error(message=f"音频文件不存在于任何路径: {file_path}", code=404)
             
             # 检查文件可读性
             if not os.access(file_path, os.R_OK):
-                return error(message="无法读取音频文件(权限不足)", code=403)
+                logger.error(f"[音频请求] 文件不可读: {file_path}")
+                return error(message="音频文件不可读", code=403)
             
-        # 获取文件扩展名决定mimetype（原有逻辑）
+            file_size = os.path.getsize(file_path)
+            logger.info(f"[音频请求] 文件大小: {file_size} bytes, 路径: {file_path}")
+        
+        # 设置mimetype
         ext = os.path.splitext(file_path)[1].lower()
         mimetypes = {
             '.mp3': 'audio/mpeg',
@@ -199,23 +277,32 @@ def get_song_audio(song_id):
         }
         mimetype = mimetypes.get(ext, 'application/octet-stream')
         
-        # 处理Range请求（支持拖动进度条）
+        # 处理Range请求（支持进度条拖动）
         range_header = request.headers.get('Range')
+        
         if range_header:
+            logger.info(f"[音频请求] Range请求: {range_header}")
             response = _send_file_range(file_path, range_header, mimetype)
         else:
             # 直接返回完整文件
+            logger.info(f"[音频请求] 完整文件请求")
             response = make_response(send_file(
                 file_path,
                 mimetype=mimetype,
                 as_attachment=False,
-                download_name=os.path.basename(file_path)
+                download_name=f"{song_id}_{os.path.basename(file_path)}"
             ))
+            response.headers['Content-Length'] = str(file_size)
         
+        # 添加缓存头，避免重复请求
+        response.headers['Cache-Control'] = 'public, max-age=3600'
+        response.headers['Accept-Ranges'] = 'bytes'
+        
+        logger.info(f"[音频请求] 成功处理: {song_id}, 大小: {file_size}")
         return response
             
     except Exception as e:
-        logger.error(f"获取音频失败 [{song_id}]: {e}", exc_info=True)
+        logger.error(f"[音频请求] 处理失败 [{song_id}]: {e}", exc_info=True)
         return error(message=f"音频服务错误: {str(e)}", code=500)
 
 
@@ -292,3 +379,129 @@ def get_genre_stats():
     except Exception as e:
         logger.error(f"获取流派统计失败: {e}")
         return error(message=str(e), code=500)
+    
+# song.py 中添加
+
+@bp.route('/<song_id>/audio/status', methods=['GET', 'OPTIONS'])
+def get_audio_status(song_id):
+    """检查音频文件是否存在（简化版）"""
+    try:
+        engine = recommender_service._engine
+        query = text("""
+            SELECT 
+                CASE WHEN audio_path IS NOT NULL AND audio_path != '' THEN 1 ELSE 0 END as has_audio,
+                track_id, song_name
+            FROM enhanced_song_features 
+            WHERE song_id = :song_id
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(query, {"song_id": song_id}).fetchone()
+            
+            if not result:
+                return error(message="歌曲不存在", code=404)
+            
+            has_audio = bool(result.has_audio)
+            file_path = None
+            
+            if has_audio:
+                # 尝试获取实际路径
+                path_query = text("SELECT audio_path FROM enhanced_song_features WHERE song_id = :song_id")
+                path_result = conn.execute(path_query, {"song_id": song_id}).fetchone()
+                file_path = path_result.audio_path if path_result else None
+                
+                # 检查文件是否存在
+                if file_path and os.path.exists(str(file_path)):
+                    file_size = os.path.getsize(str(file_path))
+                else:
+                    has_audio = False
+                    file_path = None
+            
+            return success({
+                "song_id": song_id,
+                "has_audio": has_audio,
+                "file_path": file_path,
+                "file_exists": has_audio and file_path and os.path.exists(str(file_path))
+            })
+            
+    except Exception as e:
+        logger.error(f"检查音频状态失败 [{song_id}]: {e}", exc_info=True)
+        return success({
+            "song_id": song_id,
+            "has_audio": False,
+            "error": str(e)
+        })
+    
+# 在song.py中添加搜索API
+# 在song.py的bp路由中添加
+@bp.route('/search', methods=['GET'])
+def search_songs():
+    """搜索歌曲（支持歌曲名、艺术家、专辑、流派）"""
+    try:
+        query = request.args.get('q', '').strip()
+        if not query or len(query) < 2:
+            return error(message="请输入至少2个字符进行搜索", code=400)
+        
+        limit = min(request.args.get('limit', 50, type=int), 100)
+        offset = request.args.get('offset', 0, type=int)
+        
+        engine = recommender_service._engine
+        
+        # 构建搜索查询
+        search_pattern = f"%{query}%"
+        
+        query_sql = text("""
+            SELECT 
+                song_id, song_name, artists, album, genre,
+                final_popularity as popularity,
+                danceability, energy, valence, tempo,
+                audio_path,
+                CASE 
+                    WHEN audio_path IS NOT NULL AND audio_path != '' THEN 1 
+                    ELSE 0 
+                END as has_audio
+            FROM enhanced_song_features
+            WHERE 
+                song_name LIKE :pattern OR
+                artists LIKE :pattern OR
+                album LIKE :pattern OR
+                genre LIKE :pattern
+            ORDER BY 
+                final_popularity DESC
+            OFFSET :offset ROWS
+            FETCH NEXT :limit ROWS ONLY
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(
+                query_sql, 
+                {"pattern": search_pattern, "offset": offset, "limit": limit}
+            )
+            
+            songs = [{
+                "song_id": row.song_id,
+                "song_name": row.song_name,
+                "artists": row.artists,
+                "album": row.album,
+                "genre": row.genre,
+                "popularity": int(row.popularity) if row.popularity else 50,
+                "has_audio": bool(row.has_audio),
+                "audio_features": {
+                    "danceability": float(row.danceability) if row.danceability else 0.5,
+                    "energy": float(row.energy) if row.energy else 0.5,
+                    "valence": float(row.valence) if row.valence else 0.5,
+                    "tempo": float(row.tempo) if row.tempo else 120
+                }
+            } for row in result]
+        
+        logger.info(f"[搜索] 查询: '{query}'，返回 {len(songs)} 个结果")
+        
+        return success({
+            "query": query,
+            "songs": songs,
+            "count": len(songs)
+        })
+        
+    except Exception as e:
+        logger.error(f"[搜索错误] {e}", exc_info=True)
+        return error(message=f"搜索失败: {str(e)}", code=500)

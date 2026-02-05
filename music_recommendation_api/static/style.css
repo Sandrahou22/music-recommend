@@ -2076,3 +2076,29 @@ body {
         text-align: center;
     }
 }
+
+/* ========== 搜索框修复样式 ========== */
+/* 搜索框样式 */
+.explore-search-box {
+    background: var(--bg-card);
+    padding: 2rem;
+    border-radius: 20px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.08);
+    margin: 2rem 0;
+    text-align: center;
+}
+
+.explore-search-box input {
+    transition: all 0.3s ease;
+    outline: none;
+}
+
+.explore-search-box input:focus {
+    box-shadow: 0 0 0 3px var(--primary-color), 0 6px 20px rgba(0,0,0,0.15);
+    transform: translateY(-2px);
+}
+
+.search-wrapper {
+    max-width: 600px;
+    margin: 0 auto;
+}

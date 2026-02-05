@@ -64,26 +64,35 @@ def create_app(config_name: str = None):
     app.config.from_object(config_class)
     setup_logging(app)
     
-    # CORS - 更宽松的配置
+    # 在app.py的create_app函数中，修改CORS配置：
+    # 【关键修复】添加详细的CORS配置
     CORS(app, resources={
         r"/api/*": {
-            "origins": ["http://localhost:8000", "http://127.0.0.1:8000", "http://localhost:5000"],
-            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-            "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
-            "supports_credentials": True
+            "origins": ["http://localhost:8000", "http://127.0.0.1:8000"],
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+            "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
+            "expose_headers": ["Content-Range", "X-Content-Range"],
+            "supports_credentials": True,
+            "max_age": 86400
         }
     })
-    
-    # 处理OPTIONS请求的中间件
-    # @app.before_request
-    # def handle_options_request():
-        #if request.method == 'OPTIONS':
-           # resp = app.make_default_options_response()
-           # headers = resp.headers
-           # headers['Access-Control-Allow-Origin'] = '*'
-           # headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-           # headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
-           # return resp
+
+    # 添加全局的CORS处理
+    #@app.after_request
+    #def after_request(response):
+    #    """添加CORS头到所有响应"""
+    #    response.headers.add('Access-Control-Allow-Origin', 'http://localhost:8000')
+    #    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    #    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    #    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    #    return response
+
+    # 添加一个处理OPTIONS请求的路由
+    @app.route('/', defaults={'path': ''}, methods=['OPTIONS'])
+    @app.route('/<path:path>', methods=['OPTIONS'])
+    def options_handler(path):
+        """处理所有OPTIONS预检请求"""
+        return '', 200
     
     # 注册蓝图
     from routes import recommendation, user, song
@@ -91,6 +100,9 @@ def create_app(config_name: str = None):
     app.register_blueprint(song.bp, url_prefix='/api/v1/songs')
     app.register_blueprint(user.bp, url_prefix='/api/v1/users')
     
+    # 注册蓝图（管理员）
+    from routes import admin
+    app.register_blueprint(admin.bp, url_prefix='/api/v1/admin')
 
     # 错误处理
     register_error_handlers(app)

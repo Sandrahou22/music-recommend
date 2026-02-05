@@ -1,11 +1,11 @@
 import os
 import sys
 import logging
-import threading
+import threading  # 【添加这一行】
 import time
 from functools import wraps, lru_cache
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Tuple, Any
+from typing import List, Dict, Optional, Tuple, Any  # 【添加 Any】
 from enum import Enum
 import importlib.util
 
@@ -114,6 +114,8 @@ class RecommenderService:
         # 兜底数据（当推荐引擎完全失败时使用）
         self._fallback_hot_songs: List[Dict] = []
         self._last_fallback_update = 0
+
+    
         
     @property
     def is_healthy(self) -> bool:
@@ -317,24 +319,27 @@ class RecommenderService:
     get_user_profile = get_user_profile_cached
     
     def get_recommendations(self, user_id, n=10, algorithm='hybrid'):
-        """
-        获取推荐列表 - 生产级容错版本（带音频优先级后处理）
-        """
-        # 确保初始化
-        if self._status != InitStatus.INITIALIZED and self._status != InitStatus.DEGRADED:
-            if not self.initialize():
-                raise RuntimeError("推荐系统初始化失败")
-        
         try:
-            # 【修改】使用带音频优先级的方法，但算法逻辑本身没变
-            return self._circuit_breaker.call(
-                self.get_recommendations_with_audio_priority,
-                user_id, n, algorithm
-            )
+            # 确保系统已初始化
+            self._check_initialized()
+            
+            # 直接调用内部推荐方法，绕过缓存
+            result = self._get_recommendations_internal(user_id, n, algorithm)
+            return result
+            
         except Exception as e:
-            logger.error(f"推荐生成失败[user={user_id}]: {e}", exc_info=True)
-            # 最终兜底
+            logger.error(f"获取推荐失败: {e}")
+            # 返回兜底数据
             return self._get_fallback_recommendations(n)
+        
+    def invalidate_user_cache(self, user_id: str):
+        """当用户行为更新时，清除该用户的所有缓存"""
+        with self._recommendation_cache._lock:
+            keys_to_delete = [k for k in self._recommendation_cache._cache.keys() 
+                            if k.startswith(f"{user_id}:")]
+            for key in keys_to_delete:
+                del self._recommendation_cache._cache[key]
+            logger.info(f"清除用户缓存 | user={user_id}, count={len(keys_to_delete)}")
     
     def _get_recommendations_internal(self, user_id: str, n: int, 
                                  algorithm: str) -> List[Dict]:
@@ -470,26 +475,71 @@ class RecommenderService:
             return self._recommender.hybrid_recommendation(user_id, n=n)
     
     def _format_recommendations(self, recs: List[Tuple], is_cold: bool) -> List[Dict]:
-        """格式化推荐结果"""
+        """格式化推荐结果（包含音频状态）"""
         results = []
+        
+        # 批量获取歌曲ID
+        song_ids = [str(song_id) for song_id, _ in recs]
+        
+        # 批量查询音频状态
+        audio_status_map = self._get_audio_status_batch(song_ids)
+        
         for song_id, score in recs:
             try:
                 info = self._recommender.get_song_info(song_id)
                 if info:
+                    song_id_str = str(song_id)
+                    has_audio = audio_status_map.get(song_id_str, False)
+                    
                     results.append({
-                        'song_id': str(song_id),
+                        'song_id': song_id_str,
                         'score': round(float(score), 4),
                         'song_name': info.get('song_name', '未知歌曲'),
                         'artists': info.get('artists', '未知艺术家'),
                         'genre': info.get('genre', 'unknown'),
                         'popularity': int(info.get('popularity', 50)),
                         'cold_start': is_cold,
+                        'has_audio': has_audio,  # 【关键】添加音频状态
                         'timestamp': datetime.now().isoformat()
                     })
             except Exception as e:
                 logger.warning(f"格式化歌曲 {song_id} 失败: {e}")
                 continue
         return results
+    
+    def _get_audio_status_batch(self, song_ids: List[str]) -> Dict[str, bool]:
+        """批量查询歌曲音频状态"""
+        if not song_ids or not self._engine:
+            return {}
+        
+        try:
+            # 分批查询，避免SQL过长
+            batch_size = 50
+            audio_status = {}
+            
+            for i in range(0, len(song_ids), batch_size):
+                batch = song_ids[i:i+batch_size]
+                placeholders = ', '.join([f"'{sid}'" for sid in batch])
+                
+                query = f"""
+                SELECT song_id, 
+                    CASE 
+                        WHEN audio_path IS NOT NULL AND audio_path != '' THEN 1 
+                        ELSE 0 
+                    END as has_audio
+                FROM enhanced_song_features 
+                WHERE song_id IN ({placeholders})
+                """
+                
+                with self._engine.connect() as conn:
+                    result = conn.execute(text(query))
+                    for row in result:
+                        audio_status[row.song_id] = bool(row.has_audio)
+            
+            return audio_status
+        except Exception as e:
+            logger.error(f"批量查询音频状态失败: {e}")
+            return {}
     
     def _fill_with_hot_songs(self, existing: List[Dict], n: int) -> List[Dict]:
         """用热门歌曲补全推荐列表"""
@@ -606,3 +656,64 @@ class RecommenderService:
 
 # 全局实例（单例）
 recommender_service = RecommenderService()
+
+class RecommenderService:
+    """
+    推荐系统服务包装类 - 生产级优化版本
+    """
+    
+    def __init__(self):
+        self._recommender = None
+        self._engine = None
+        self._status = InitStatus.UNINITIALIZED
+        self._init_lock = threading.RLock()
+        self._init_error: Optional[str] = None
+        self._valid_users: set = set()
+        self._module = None
+        self._circuit_breaker = CircuitBreaker(
+            threshold=Config.CIRCUIT_BREAKER_THRESHOLD,
+            timeout=Config.CIRCUIT_BREAKER_TIMEOUT
+        )
+        
+        # 【修复1】添加缓存相关属性初始化
+        self._recommendation_cache = RecommendationCache()  # 创建缓存实例
+        self._cache_ttl = Config.CACHE_RECOMMENDATIONS_TTL  # 缓存过期时间
+        
+        # 兜底数据（当推荐引擎完全失败时使用）
+        self._fallback_hot_songs: List[Dict] = []
+        self._last_fallback_update = 0
+    
+    def get(self, key: str, ttl_seconds: int = 1800) -> Optional[Any]:
+        """获取缓存，如果过期返回None"""
+        with self._lock:
+            if key not in self._cache:
+                return None
+            
+            timestamp, data = self._cache[key]
+            if time.time() - timestamp > ttl_seconds:
+                # 过期清理
+                del self._cache[key]
+                return None
+            return data
+    
+    def set(self, key: str, data: Any) -> None:
+        """设置缓存"""
+        with self._lock:
+            self._cache[key] = (time.time(), data)
+    
+    def clear(self) -> None:
+        """清空缓存"""
+        with self._lock:
+            self._cache.clear()
+    
+    def get_stats(self) -> dict:
+        """获取缓存统计（用于调试）"""
+        with self._lock:
+            now = time.time()
+            total = len(self._cache)
+            expired = sum(1 for ts, _ in self._cache.values() if now - ts > 1800)
+            return {
+                "total_keys": total,
+                "expired_keys": expired,
+                "active_keys": total - expired
+            }

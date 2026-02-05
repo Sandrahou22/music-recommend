@@ -248,6 +248,24 @@
                 <h2 class="section-title">发现音乐</h2>
                 <p class="section-subtitle">探索不同流派和热度的音乐</p>
             </div>
+
+            <!---搜索框-->
+            <!-- 修改搜索框HTML -->
+            <div class="explore-search-box">
+                <div class="search-wrapper">
+                    <input type="text" id="explore-search-input" 
+                        placeholder="搜索歌曲、艺术家、专辑..." 
+                        style="width: 100%; padding: 1rem 1.5rem; border: none; border-radius: 50px; font-size: 1rem; background: var(--bg-secondary); color: var(--text-primary); box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+                </div>
+                <div class="search-actions" style="display: flex; gap: 1rem; justify-content: center; margin-top: 1rem;">
+                    <button id="search-btn-execute" class="btn btn-primary" style="padding: 0.8rem 2rem;">
+                        <i class="fas fa-search"></i> 搜索
+                    </button>
+                    <button id="clear-search-btn" class="btn btn-secondary" style="padding: 0.8rem 2rem;">
+                        <i class="fas fa-times"></i> 清除
+                    </button>
+                </div>
+            </div>
             
             <!-- 流派筛选 -->
             <div class="genre-filter">
@@ -257,6 +275,17 @@
                 </div>
             </div>
             
+                <!-- 搜索结果统计 -->
+            <div id="explore-results-info" style="margin: 1rem 0; display: none;">
+                <h3 style="font-size: 1.1rem;">
+                    <i class="fas fa-search"></i> 
+                    <span id="search-result-count">0</span> 个搜索结果
+                    <button id="clear-search-btn" class="btn btn-small" style="margin-left: 1rem; font-size: 0.9rem;">
+                        <i class="fas fa-times"></i> 清除搜索
+                    </button>
+                </h3>
+            </div>
+
             <!-- 探索结果 -->
             <div id="explore-container" class="songs-grid">
                 <!-- 探索结果会动态加载到这里 -->
@@ -402,6 +431,12 @@
             <button class="player-btn playlist-toggle-btn" onclick="togglePlaylist()" title="播放列表">
                 <i class="fas fa-list-ul"></i>
                 <span class="playlist-count" id="playlist-count">0</span>
+            </button>
+        </div>
+        <!-- 在播放器控件部分添加 -->
+        <div class="player-debug" style="position: absolute; right: 10px; top: 10px; z-index: 1001;">
+            <button class="btn btn-small" onclick="clearAudioCache()" title="清除音频缓存">
+                <i class="fas fa-sync"></i> 刷新
             </button>
         </div>
     </div>

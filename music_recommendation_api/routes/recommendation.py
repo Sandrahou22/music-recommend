@@ -57,6 +57,23 @@ def get_recommendations(user_id: str):
             n=n,
             algorithm=algorithm
         )
+
+        try:
+            recommendations_to_save = []
+            for i, rec in enumerate(recs):
+                recommendations_to_save.append({
+                    "song_id": rec.get('song_id'),
+                    "score": rec.get('score', 0.0),
+                    "algorithm": algorithm,
+                    "rank_position": i + 1
+                })
+            
+            # 调用保存函数（可以异步执行，不阻塞响应）
+            save_recommendations_async(user_id, recommendations_to_save)
+            
+        except Exception as save_err:
+            logger.warning(f"保存推荐记录失败: {save_err}")
+            # 不阻断主流程
         
         # 3. 获取用户画像（冷启动标记）
         profile = recommender_service.get_user_profile_cached(user_id)
@@ -569,3 +586,39 @@ def get_similar_songs(song_id):
     except Exception as e:
         logger.error(f"获取相似歌曲失败: {e}")
         return error(message=str(e), code=500)
+    
+import threading
+from datetime import datetime, timedelta
+
+def save_recommendations_async(user_id, recommendations):
+    """异步保存推荐结果"""
+    def save_task():
+        try:
+            engine = recommender_service._engine
+            expires_at = datetime.now() + timedelta(hours=24)
+            
+            with engine.begin() as conn:
+                for rec in recommendations:
+                    conn.execute(text("""
+                        INSERT INTO recommendations 
+                        (user_id, song_id, recommendation_score, algorithm_type, 
+                         rank_position, expires_at, created_at)
+                        VALUES 
+                        (:user_id, :song_id, :score, :algorithm, 
+                         :rank_pos, :expires, GETDATE())
+                    """), {
+                        "user_id": user_id,
+                        "song_id": rec['song_id'],
+                        "score": rec['score'],
+                        "algorithm": rec['algorithm'],
+                        "rank_pos": rec['rank_position'],
+                        "expires": expires_at
+                    })
+                    
+            logger.info(f"异步保存推荐成功 | user={user_id}, count={len(recommendations)}")
+        except Exception as e:
+            logger.error(f"异步保存推荐失败: {e}")
+    
+    # 启动后台线程
+    thread = threading.Thread(target=save_task, daemon=True)
+    thread.start()

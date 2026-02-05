@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MusicRec 音乐推荐系统管理后台</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+    <!-- 登录页面 -->
+    <div id="login-page" class="login-container">
+        <div class="login-box">
+            <div class="login-header">
+                <h2><i class="fas fa-music" style="color: var(--primary-color);"></i> MusicRec</h2>
+                <p>音乐推荐系统管理后台</p>
+            </div>
+            <form id="admin-login-form">
+                <div class="input-wrapper">
+                    <i class="fas fa-user form-icon"></i>
+                    <input type="text" id="admin-username" placeholder="管理员账号" required>
+                </div>
+                <div class="input-wrapper">
+                    <i class="fas fa-lock form-icon"></i>
+                    <input type="password" id="admin-password" placeholder="密码" required>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%; padding: 1rem; font-size: 1rem; margin-top: 0.5rem; text-align: center;">
+                    <span id="login-text">登录</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- 管理后台 -->
+    <div id="admin-dashboard" class="hidden">
+        <div class="admin-layout">
+            <aside class="admin-sidebar">
+                <div class="sidebar-header">
+                    <h3><i class="fas fa-music"></i> MusicRec Admin</h3>
+                    <p>欢迎，<span id="admin-name">管理员</span></p>
+                </div>
+                <ul class="nav-menu">
+                    <li class="nav-item">
+                        <button class="nav-link active" onclick="switchPage('dashboard', this)">
+                            <i class="fas fa-chart-line"></i> 概览面板
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link" onclick="switchPage('songs', this)">
+                            <i class="fas fa-music"></i> 歌曲管理
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link" onclick="switchPage('users', this)">
+                            <i class="fas fa-users"></i> 用户管理
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link" onclick="switchPage('config', this)">
+                            <i class="fas fa-cog"></i> 系统配置
+                        </button>
+                    </li>
+                </ul>
+                <button class="logout-btn" onclick="logout()">
+                    <i class="fas fa-sign-out-alt"></i> 退出登录
+                </button>
+            </aside>
+
+            <main class="admin-main">
+                <header class="admin-header">
+                    <h2 id="page-title">概览面板</h2>
+                    <div style="display: flex; align-items: center; gap: 1rem;">
+                        <span id="current-time" style="color: var(--text-secondary); font-size: 0.9rem;"></span>
+                        <div class="ab-test-status inactive" id="ab-test-indicator">
+                            <i class="fas fa-flask"></i> A/B测试: 关闭
+                        </div>
+                    </div>
+                </header>
+
+                <div class="admin-content">
+                    <!-- 概览面板 -->
+                    <div id="page-dashboard" class="page-content active">
+                        <div class="stat-cards">
+                            <div class="stat-card">
+                                <h3>总用户数</h3>
+                                <div class="number" id="stat-total-users">-</div>
+                                <div class="trend"><i class="fas fa-arrow-up"></i> <span id="trend-users">12%</span> 较上月</div>
+                            </div>
+                            <div class="stat-card success">
+                                <h3>总歌曲数</h3>
+                                <div class="number" id="stat-total-songs">-</div>
+                                <div class="trend"><i class="fas fa-arrow-up"></i> 新增 <span id="trend-songs">156</span> 首</div>
+                            </div>
+                            <div class="stat-card warning">
+                                <h3>今日播放量</h3>
+                                <div class="number" id="stat-plays-today">-</div>
+                                <div class="trend"><i class="fas fa-fire"></i> 实时更新</div>
+                            </div>
+                            <div class="stat-card info">
+                                <h3>推荐成功率</h3>
+                                <div class="number" id="stat-success-rate">87%</div>
+                                <div class="trend" id="rate-trend"><i class="fas fa-check-circle"></i> 运行正常</div>
+                            </div>
+                        </div>
+                        <div class="charts-grid">
+                            <div class="chart-container">
+                                <div class="chart-header">
+                                    <div>
+                                        <div class="chart-title"><i class="fas fa-pie-chart"></i> 流派分布</div>
+                                    </div>
+                                </div>
+                                <div id="chart-genres" class="chart-box"></div>
+                            </div>
+                            <div class="chart-container">
+                                <div class="chart-header">
+                                    <div>
+                                        <div class="chart-title"><i class="fas fa-chart-line"></i> 近7天用户增长</div>
+                                    </div>
+                                </div>
+                                <div id="chart-growth" class="chart-box"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="chart-container" style="margin-bottom: 2rem;">
+                            <div class="chart-header">
+                                <div>
+                                    <div class="chart-title"><i class="fas fa-chart-bar"></i> 热门歌曲 Top 10</div>
+                                    <div class="chart-subtitle">按总播放量排序（播放次数越多排名越高）</div>
+                                </div>
+                            </div>
+                            <div id="chart-hot-songs" style="height: 350px;"></div>
+                        </div>
+
+                        <div class="chart-container">
+                            <div class="chart-header">
+                                <div>
+                                    <div class="chart-title"><i class="fas fa-project-diagram"></i> 推荐算法多维度性能对比</div>
+                                    <div class="chart-subtitle">各算法在召回率、准确率、多样性维度的表现（数值范围0-100）</div>
+                                </div>
+                            </div>
+                            <div id="chart-algorithm-compare" style="height: 350px;"></div>
+                        </div>
+                        <!-- 在概览面板现有图表后添加 -->
+                        <div class="charts-grid" style="margin-top: 2rem;">
+                            <!-- 用户活跃度分布 -->
+                            <div class="chart-container">
+                                <div class="chart-header">
+                                    <div class="chart-title"><i class="fas fa-chart-pie"></i> 用户活跃度分布</div>
+                                </div>
+                                <div id="chart-activity-dist" class="chart-box"></div>
+                            </div>
+                            
+                            <!-- 性别分布 -->
+                            <div class="chart-container">
+                                <div class="chart-header">
+                                    <div class="chart-title"><i class="fas fa-venus-mars"></i> 用户性别分布</div>
+                                </div>
+                                <div id="chart-gender-dist" class="chart-box"></div>
+                            </div>
+                            
+                            <!-- 年龄段分布 -->
+                            <div class="chart-container">
+                                <div class="chart-header">
+                                    <div class="chart-title"><i class="fas fa-birthday-cake"></i> 用户年龄段分布</div>
+                                </div>
+                                <div id="chart-age-dist" class="chart-box"></div>
+                            </div>
+                            
+                            <!-- 交互行为统计 -->
+                            <div class="chart-container">
+                                <div class="chart-header">
+                                    <div class="chart-title"><i class="fas fa-mouse-pointer"></i> 近7天交互行为</div>
+                                </div>
+                                <div id="chart-behavior" class="chart-box"></div>
+                            </div>
+                        </div>
+
+                        <!-- 算法使用情况 + 音频特征 -->
+                        <div class="charts-grid" style="margin-top: 1.5rem;">
+                            <div class="chart-container">
+                                <div class="chart-header">
+                                    <div class="chart-title"><i class="fas fa-code-branch"></i> 推荐算法使用情况（总计）</div>
+                                </div>
+                                <div id="chart-algorithm-usage" class="chart-box"></div>
+                            </div>
+                            
+                            <div class="chart-container">
+                                <div class="chart-header">
+                                    <div class="chart-title"><i class="fas fa-music"></i> 音频特征平均值</div>
+                                </div>
+                                <div id="chart-audio-features" class="chart-box"></div>
+                            </div>
+                        </div>
+
+                        <!-- 用户地理分布 -->
+                        <div class="chart-container" style="grid-column: 1 / -1; margin-top: 1.5rem;">
+                            <div class="chart-header">
+                                <div class="chart-title"><i class="fas fa-map-marked-alt"></i> 用户省份分布 Top15</div>
+                            </div>
+                            <div id="chart-province-map" style="height: 500px;"></div>
+                        </div>
+
+                        <!-- 每日CTR趋势 -->
+                        <div class="chart-container" style="margin-top: 1.5rem; margin-bottom: 2rem;">
+                            <div class="chart-header">
+                                <div class="chart-title"><i class="fas fa-percentage"></i> 近7天推荐点击率趋势</div>
+                            </div>
+                            <div id="chart-daily-ctr" style="height: 300px;"></div>
+                        </div>
+                    </div>
+
+                    <!-- 歌曲管理 -->
+                    <div id="page-songs" class="page-content">
+                        <div class="data-table-container">
+                            <div class="table-header">
+                                <div class="table-title"><i class="fas fa-music"></i> 歌曲列表</div>
+                                <div class="table-toolbar">
+                                    <div class="search-box">
+                                        <input type="text" id="song-search-input" placeholder="搜索歌曲名、艺术家...">
+                                        <button onclick="searchSongs()" title="搜索"><i class="fas fa-search"></i></button>
+                                    </div>
+                                    <select id="song-genre-filter" class="form-control" style="width: 120px;" onchange="loadSongsList(1)">
+                                        <option value="">所有流派</option>
+                                        <option value="华语流行">华语流行</option>
+                                        <option value="欧美流行">欧美流行</option>
+                                        <option value="Rock">Rock</option>
+                                        <option value="Electronic">Electronic</option>
+                                        <option value="Pop">Pop</option>
+                                        <option value="Rap">Rap</option>
+                                        <option value="Metal">Metal</option>
+                                        <option value="民谣">民谣</option>
+                                    </select>
+                                    <button class="btn btn-primary" onclick="refreshSongs()">
+                                        <i class="fas fa-sync-alt"></i> 刷新
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <table class="admin-table" id="songs-table">
+                                <thead>
+                                    <tr>
+                                        <th onclick="sortSongs('song_id')">
+                                            ID <span class="sort-icon"></span>
+                                        </th>
+                                        <th>
+                                            歌曲名
+                                        </th>
+                                        <th>艺术家</th>
+                                        <th>流派</th>
+                                        <th onclick="sortSongs('final_popularity')">
+                                            流行度 <span class="sort-icon"></span>
+                                        </th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="songs-table-body">
+                                    <!-- 动态加载 -->
+                                </tbody>
+                            </table>
+
+                            <div class="pagination" id="songs-pagination">
+                                <!-- 动态生成分页 -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 用户管理 -->
+                    <div id="page-users" class="page-content">
+                        <div class="data-table-container">
+                            <div class="table-header">
+                                <div class="table-title"><i class="fas fa-users"></i> 用户列表</div>
+                                <div class="table-toolbar">
+                                    <div class="search-box">
+                                        <input type="text" id="user-search-input" placeholder="搜索用户ID、昵称...">
+                                        <button onclick="searchUsers()" title="搜索"><i class="fas fa-search"></i></button>
+                                    </div>
+                                    <select id="user-activity-filter" class="form-control" style="width: 140px;">
+                                        <option value="">所有等级</option>
+                                        <option value="新用户">新用户</option>
+                                        <option value="低活跃">低活跃</option>
+                                        <option value="中低活跃">中低活跃</option>
+                                        <option value="普通用户">普通用户</option>
+                                        <option value="中高活跃">中高活跃</option>
+                                        <option value="高活跃">高活跃</option>
+                                    </select>
+                                    <button class="btn btn-primary" onclick="refreshUsers()">
+                                        <i class="fas fa-sync-alt"></i> 刷新
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <table class="admin-table" id="users-table">
+                                <thead>
+                                    <tr>
+                                        <th>用户ID</th>
+                                        <th>昵称</th>
+                                        <th>角色</th>
+                                        <th>活跃度</th>
+                                        <th>听歌数量</th>
+                                        <th>注册时间</th>
+                                        <th>操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="users-table-body">
+                                    <!-- 动态加载 -->
+                                </tbody>
+                            </table>
+
+                            <div class="pagination" id="users-pagination">
+                                <!-- 动态生成分页 -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 系统配置 -->
+                    <div id="page-config" class="page-content">
+                                                    <div class="config-section">
+                                <div class="config-header">
+                                    <h3><i class="fas fa-sliders-h"></i> 推荐算法权重配置</h3>
+                                    <p class="form-hint">当前系统使用的算法权重配比（总权重100%）</p>
+                                </div>
+                                
+                                <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin: 1.5rem 0;">
+                                    <!-- ItemCF 权重 -->
+                                    <div style="padding: 1.25rem; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #4361ee;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                            <h4 style="color: #4361ee; margin: 0; font-size: 1rem;">
+                                                <i class="fas fa-cube"></i> ItemCF
+                                            </h4>
+                                            <span style="font-size: 1.5rem; font-weight: 700; color: #4361ee;" id="itemcf-display">35%</span>
+                                        </div>
+                                        <p style="margin: 0; color: #666; font-size: 0.9rem;">
+                                            基于物品的协同过滤<br/>
+                                            权重: <span id="itemcf-value">35%</span>
+                                        </p>
+                                    </div>
+                                    
+                                    <!-- UserCF 权重 -->
+                                    <div style="padding: 1.25rem; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #06d6a0;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                            <h4 style="color: #06d6a0; margin: 0; font-size: 1rem;">
+                                                <i class="fas fa-user-friends"></i> UserCF
+                                            </h4>
+                                            <span style="font-size: 1.5rem; font-weight: 700; color: #06d6a0;" id="usercf-display">25%</span>
+                                        </div>
+                                        <p style="margin: 0; color: #666; font-size: 0.9rem;">
+                                            基于用户的协同过滤<br/>
+                                            权重: <span id="usercf-value">25%</span>
+                                        </p>
+                                    </div>
+                                    
+                                    <!-- Content 权重 -->
+                                    <div style="padding: 1.25rem; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #f72585;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                            <h4 style="color: #f72585; margin: 0; font-size: 1rem;">
+                                                <i class="fas fa-file-alt"></i> Content
+                                            </h4>
+                                            <span style="font-size: 1.5rem; font-weight: 700; color: #f72585;" id="content-display">25%</span>
+                                        </div>
+                                        <p style="margin: 0; color: #666; font-size: 0.9rem;">
+                                            基于内容的推荐<br/>
+                                            权重: <span id="content-value">25%</span>
+                                        </p>
+                                    </div>
+                                    
+                                    <!-- MF 权重 -->
+                                    <div style="padding: 1.25rem; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #ffd166;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                            <h4 style="color: #d4a017; margin: 0; font-size: 1rem;">
+                                                <i class="fas fa-calculator"></i> 矩阵分解
+                                            </h4>
+                                            <span style="font-size: 1.5rem; font-weight: 700; color: #d4a017;" id="mf-display">15%</span>
+                                        </div>
+                                        <p style="margin: 0; color: #666; font-size: 0.9rem;">
+                                            矩阵分解算法<br/>
+                                            权重: <span id="mf-value">15%</span>
+                                        </p>
+                                    </div>
+                                </div>
+                                
+                                <div style="padding: 1rem; background: #e9ecef; border-radius: 8px; text-align: center;">
+                                    <span style="color: var(--text-secondary);">当前总权重：</span>
+                                    <span id="total-weight" style="font-size: 1.25rem; font-weight: 700; color: var(--primary-color);">100%</span>
+                                </div>
+                            </div>
+                            <!-- A/B测试配置 -->
+                            <div class="config-section" style="border-left: 4px solid var(--success-color);">
+                                <div class="config-header">
+                                    <h3><i class="fas fa-flask"></i> A/B测试配置</h3>
+                                    <p class="form-hint">启用后，系统将自动分流用户进行算法对比实验，结果将显示在概览面板</p>
+                                </div>
+                                
+                                <div class="config-item">
+                                    <div class="config-info">
+                                        <h4>启用A/B测试</h4>
+                                        <p>开启后将对比不同算法的效果差异，数据实时更新在概览面板</p>
+                                    </div>
+                                    <label class="switch">
+                                        <input type="checkbox" id="ab-test-toggle" onchange="toggleABTest()">
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+
+                                <div id="ab-test-config" class="hidden" style="margin-top: 1.5rem; padding: 1.5rem; background: #f8f9fa; border-radius: 8px;">
+                                    <h4 style="margin-bottom: 1rem;">测试组配置</h4>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                                        <div class="form-group">
+                                            <label>对照组 (A组)</label>
+                                            <select class="form-control" id="ab-group-a">
+                                                <option value="hybrid" selected>Hybrid 混合推荐 (当前)</option>
+                                                <option value="itemcf">纯 ItemCF</option>
+                                                <option value="usercf">纯 UserCF</option>
+                                                <option value="content">纯 Content</option>
+                                            </select>
+                                            <div class="form-hint">占比 50% 用户</div>
+                                        </div>
+                                        <div class="form-group">
+                                            <label>实验组 (B组)</label>
+                                            <select class="form-control" id="ab-group-b">
+                                                <option value="hybrid">Hybrid 混合推荐</option>
+                                                <option value="itemcf" selected>纯 ItemCF (对比)</option>
+                                                <option value="usercf">纯 UserCF</option>
+                                                <option value="content">纯 Content</option>
+                                            </select>
+                                            <div class="form-hint">占比 50% 用户</div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- A/B测试指标说明 -->
+                                    <div style="margin-top: 1.5rem; padding: 1rem; background: white; border-radius: 6px; border: 1px solid #e0e0e0;">
+                                        <h5 style="margin-bottom: 0.5rem; color: var(--text-secondary);"><i class="fas fa-info-circle"></i> 测试指标说明</h5>
+                                        <ul style="font-size: 0.9rem; color: var(--text-secondary); padding-left: 1.5rem; margin: 0;">
+                                            <li><strong>点击率 (CTR)：</strong>用户点击推荐歌曲的比例</li>
+                                            <li><strong>平均播放时长：</strong>用户播放推荐歌曲的平均时间</li>
+                                            <li><strong>收藏转化率：</strong>用户将推荐歌曲加入收藏的比例</li>
+                                            <li><strong>结果查看：</strong>开启后返回概览面板查看实时对比数据</li>
+                                        </ul>
+                                    </div>
+                                    <div id="ab-results-config" class="ab-results-panel" style="display: none; margin-top: 2rem;">
+                                        <h4 style="display: flex; align-items: center; gap: 0.5rem; color: var(--primary-color); margin-bottom: 1.5rem;">
+                                            <i class="fas fa-chart-bar"></i> 实时测试结果
+                                            <span class="status-badge badge-success" style="margin-left: auto; font-size: 0.8rem;">
+                                                <i class="fas fa-circle" style="font-size: 0.5rem;"></i> 运行中
+                                            </span>
+                                        </h4>
+                                        
+                                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-bottom: 1.5rem;">
+                                            <div style="padding: 1.5rem; background: white; border-radius: 12px; border: 2px solid #4361ee;">
+                                                <h4 style="margin-bottom: 1rem; color: #4361ee; font-size: 1.1rem;">对照组 (A组)</h4>
+                                                <div class="ab-metric">
+                                                    <span class="ab-metric-label">点击率 (CTR)</span>
+                                                    <span class="ab-metric-value" id="ab-config-a-ctr">12.5%</span>
+                                                </div>
+                                                <div class="ab-metric">
+                                                    <span class="ab-metric-label">平均播放时长</span>
+                                                    <span class="ab-metric-value" id="ab-config-a-duration">3:45</span>
+                                                </div>
+                                                <div class="ab-metric">
+                                                    <span class="ab-metric-label">收藏转化率</span>
+                                                    <span class="ab-metric-value" id="ab-config-a-conversion">8.2%</span>
+                                                </div>
+                                            </div>
+                                            
+                                            <div style="padding: 1.5rem; background: white; border-radius: 12px; border: 2px solid #f72585;">
+                                                <h4 style="margin-bottom: 1rem; color: #f72585; font-size: 1.1rem;">实验组 (B组)</h4>
+                                                <div class="ab-metric">
+                                                    <span class="ab-metric-label">点击率 (CTR)</span>
+                                                    <span class="ab-metric-value" id="ab-config-b-ctr">10.8%</span>
+                                                </div>
+                                                <div class="ab-metric">
+                                                    <span class="ab-metric-label">平均播放时长</span>
+                                                    <span class="ab-metric-value" id="ab-config-b-duration">3:12</span>
+                                                </div>
+                                                <div class="ab-metric">
+                                                    <span class="ab-metric-label">收藏转化率</span>
+                                                    <span class="ab-metric-value" id="ab-config-b-conversion">6.5%</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div style="padding: 1rem; background: rgba(67,97,238,0.05); border-radius: 8px; text-align: center;">
+                                            <span style="color: var(--text-secondary);">当前胜出：</span>
+                                            <span style="font-weight: 700; color: var(--success-color);">
+                                                <i class="fas fa-trophy"></i> <span id="ab-winner-text">A组 (Hybrid) 点击率高出 15.7%</span>
+                                            </span>
+                                        </div>
+                                        
+                                        <!-- 刷新按钮 -->
+                                        <div style="text-align: center; margin-top: 1rem;">
+                                            <button class="btn btn-secondary" onclick="refreshABTestResults()">
+                                                <i class="fas fa-sync-alt"></i> 刷新数据
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 其他配置 -->
+                            <div class="config-section">
+                                <div class="config-header">
+                                    <h3><i class="fas fa-cogs"></i> 其他系统配置</h3>
+                                </div>
+                                
+                                <div class="config-item">
+                                    <div class="config-info">
+                                        <h4>推荐缓存时间</h4>
+                                        <p>推荐结果在缓存中的保留时长</p>
+                                    </div>
+                                    <select class="form-control" id="cache-ttl" style="width: 150px;">
+                                        <option value="15">15分钟</option>
+                                        <option value="30" selected>30分钟</option>
+                                        <option value="60">1小时</option>
+                                        <option value="120">2小时</option>
+                                    </select>
+                                </div>
+
+                                <div class="config-item">
+                                    <div class="config-info">
+                                        <h4>多样性重排序 (MMR)</h4>
+                                        <p>启用最大边际相关性算法平衡准确性与多样性</p>
+                                    </div>
+                                    <label class="switch">
+                                        <input type="checkbox" id="mmr-toggle" checked>
+                                        <span class="slider"></span>
+                                    </label>
+                                </div>
+
+                                <div class="config-item">
+                                    <div class="config-info">
+                                        <h4>冷启动策略</h4>
+                                        <p>新用户推荐策略选择</p>
+                                    </div>
+                                    <select class="form-control" id="cold-start-strategy" style="width: 200px;">
+                                        <option value="hot">热门分层采样 (Hit/Popular/Normal)</option>
+                                        <option value="profile">基于画像个性化</option>
+                                        <option value="mixed">混合策略</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div style="text-align: center; margin-top: 2rem; margin-bottom: 3rem;">
+                                <button class="btn btn-primary" onclick="saveConfig()" style="padding: 1rem 3rem; font-size: 1rem;">
+                                    <i class="fas fa-save"></i> 保存所有配置
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- 编辑歌曲弹窗 -->
+    <div id="edit-song-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width: 700px;">
+            <div class="modal-header">
+                <h3><i class="fas fa-edit"></i> 编辑歌曲信息</h3>
+                <button class="modal-close" onclick="closeModal('edit-song-modal')">&times;</button>
+            </div>
+            <div class="modal-body" style="max-height: 70vh; overflow-y: auto;">
+                <input type="hidden" id="edit-song-id">
+                
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <!-- 左列：基本信息 -->
+                    <div>
+                        <div class="form-group">
+                            <label>歌曲名 <span style="color: red">*</span></label>
+                            <input type="text" class="form-control" id="edit-song-name">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>艺术家 <span style="color: red">*</span></label>
+                            <input type="text" class="form-control" id="edit-artists">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>专辑</label>
+                            <input type="text" class="form-control" id="edit-album">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>流派</label>
+                            <select class="form-control" id="edit-genre">
+                                <option value="Rock">Rock</option>
+                                <option value="华语流行">华语流行</option>
+                                <option value="欧美流行">欧美流行</option>
+                                <option value="Electronic">Electronic</option>
+                                <option value="Pop">Pop</option>
+                                <option value="Rap">Rap</option>
+                                <option value="Metal">Metal</option>
+                                <option value="民谣">民谣</option>
+                                <option value="Jazz">Jazz</option>
+                                <option value="Folk">Folk</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <!-- 右列：扩展信息 -->
+                    <div>
+                        <div class="form-group">
+                            <label>语言</label>
+                            <select class="form-control" id="edit-language">
+                                <option value="chinese">中文</option>
+                                <option value="english">英文</option>
+                                <option value="japanese">日文</option>
+                                <option value="korean">韩文</option>
+                                <option value="other">其他</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>发行年份</label>
+                            <input type="number" class="form-control" id="edit-publish-year" min="1900" max="2030">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>时长（毫秒）</label>
+                            <input type="number" class="form-control" id="edit-duration" placeholder="例如：180000">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>流行度调整 <span id="edit-popularity-value" style="color: var(--primary-color); font-weight: 600;">50</span></label>
+                            <input type="range" class="form-control" id="edit-popularity" min="0" max="100" value="50" 
+                                oninput="document.getElementById('edit-popularity-value').textContent = this.value">
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 音频特征（可选折叠） -->
+                <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
+                    <h4 style="font-size: 1rem; margin-bottom: 1rem; color: var(--text-secondary);">
+                        <i class="fas fa-sliders-h"></i> 音频特征调整（可选）
+                    </h4>
+                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;">
+                        <div class="form-group">
+                            <label>舞曲性 (Danceability) <span id="edit-dance-val">0.5</span></label>
+                            <input type="range" class="form-control" id="edit-danceability" min="0" max="1" step="0.01" value="0.5"
+                                oninput="document.getElementById('edit-dance-val').textContent = this.value">
+                        </div>
+                        <div class="form-group">
+                            <label>能量感 (Energy) <span id="edit-energy-val">0.5</span></label>
+                            <input type="range" class="form-control" id="edit-energy" min="0" max="1" step="0.01" value="0.5"
+                                oninput="document.getElementById('edit-energy-val').textContent = this.value">
+                        </div>
+                        <div class="form-group">
+                            <label>情绪值 (Valence) <span id="edit-valence-val">0.5</span></label>
+                            <input type="range" class="form-control" id="edit-valence" min="0" max="1" step="0.01" value="0.5"
+                                oninput="document.getElementById('edit-valence-val').textContent = this.value">
+                        </div>
+                        <div class="form-group">
+                            <label>节奏 (Tempo) <span id="edit-tempo-val">120</span> BPM</label>
+                            <input type="range" class="form-control" id="edit-tempo" min="60" max="200" step="1" value="120"
+                                oninput="document.getElementById('edit-tempo-val').textContent = this.value">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('edit-song-modal')">取消</button>
+                <button class="btn btn-primary" onclick="saveSongEdit()">保存修改</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 编辑用户弹窗 -->
+    <div id="edit-user-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width: 600px;">
+            <div class="modal-header">
+                <h3><i class="fas fa-user-edit"></i> 编辑用户信息</h3>
+                <button class="modal-close" onclick="closeModal('edit-user-modal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit-user-id">
+                
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                    <div class="form-group">
+                        <label>用户ID</label>
+                        <input type="text" class="form-control" id="edit-user-id-display" disabled>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>昵称</label>
+                        <input type="text" class="form-control" id="edit-nickname">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>性别</label>
+                        <select class="form-control" id="edit-gender">
+                            <option value="">保密</option>
+                            <option value="1">男</option>
+                            <option value="2">女</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>年龄</label>
+                        <input type="number" class="form-control" id="edit-age" min="12" max="100">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>省份</label>
+                        <input type="text" class="form-control" id="edit-province">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>城市</label>
+                        <input type="text" class="form-control" id="edit-city">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>角色</label>
+                        <select class="form-control" id="edit-role">
+                            <option value="user">普通用户</option>
+                            <option value="admin">管理员</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>活跃度等级</label>
+                        <select class="form-control" id="edit-activity">
+                            <option value="新用户">新用户</option>
+                            <option value="低活跃">低活跃</option>
+                            <option value="中低活跃">中低活跃</option>
+                            <option value="普通用户">普通用户</option>
+                            <option value="中高活跃">中高活跃</option>
+                            <option value="高活跃">高活跃</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('edit-user-modal')">取消</button>
+                <button class="btn btn-primary" onclick="saveUserEdit()">保存修改</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="admin.js"></script>
+</body>
+</html>

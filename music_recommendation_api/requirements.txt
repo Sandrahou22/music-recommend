@@ -18,3 +18,6 @@ python-dotenv==1.0.0
 
 # Windows生产服务器
 waitress==2.1.2
+
+# JWT认证（管理员后台需要）
+PyJWT==2.8.0
