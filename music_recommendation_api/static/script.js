@@ -8,6 +8,13 @@ let isPlaying = false;
 let currentSongIndex = 0;
 let playerInterval;
 
+// ========== 评论功能全局变量 ==========
+let currentSongIdForComments = null;
+let currentCommentsData = null;
+let commentsSortBy = 'time';
+let commentsCurrentPage = 1;
+let commentsTotalPages = 1;
+
 let isInitialized = false;
 let genreEventsBound = false;
 let loadMoreInitialized = false;
@@ -47,6 +54,13 @@ const REVERSE_MAP = {
 };
 
 const DISPLAY_GENRES = ['流行', '摇滚', '电子', '金属', '说唱', '民谣', '其他'];
+
+// 情感图标映射
+const SENTIMENT_ICONS = {
+    'sentiment-positive': 'fa-smile',
+    'sentiment-neutral': 'fa-meh',
+    'sentiment-negative': 'fa-frown'
+};
 
 // API配置
 const API_BASE_URL = "http://127.0.0.1:5000/api/v1";
@@ -156,6 +170,9 @@ function initApp() {
     
     isInitialized = true;
     console.log('[初始化] 完成');
+
+    // 初始化评论字符计数
+    initCommentCharCount();
 }
 
 // 检查API连接
@@ -729,6 +746,20 @@ function setupEventListeners() {
         bindGenreEvents();
         initLoadMore();
     }, 1000); // 延迟1秒确保DOM加载完成
+
+    // 评论相关事件
+    initCommentCharCount();
+    
+    // 提交评论快捷键（Ctrl+Enter）
+    const commentTextarea = document.getElementById('comment-textarea');
+    if (commentTextarea) {
+        commentTextarea.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.key === 'Enter') {
+                e.preventDefault();
+                submitComment();
+            }
+        });
+    }
 }
 
 // ========== 播放列表功能 ==========
@@ -1994,6 +2025,7 @@ async function showSongDetail(songId) {
         if (data.success) {
             const song = data.data;
             
+            // 获取推荐解释
             let explanation = null;
             if (currentUser) {
                 try {
@@ -2003,7 +2035,7 @@ async function showSongDetail(songId) {
                     if (recResponse.ok) {
                         const recData = await recResponse.json();
                         if (recData.success && recData.data) {
-                            explanation = recData.data.explanation || recData.data
+                            explanation = recData.data.explanation || recData.data;
                         }
                     }
                 } catch (e) {
@@ -2011,7 +2043,13 @@ async function showSongDetail(songId) {
                 }
             }
             
+            // 显示歌曲详情
             displaySongDetail(song, explanation);
+            
+            // 延迟加载评论，确保DOM已更新
+            setTimeout(() => {
+                loadSongComments(songId);
+            }, 100);
         } else {
             throw new Error(data.message || '获取歌曲详情失败');
         }
@@ -2075,12 +2113,13 @@ function renderSimilarityGraph(centerId, similarSongs) {
 }
 
 function displaySongDetail(song, explanation = null) {
-    document.getElementById('modal-song-title').textContent = '歌曲详情';
+    // 设置歌曲基本信息
     document.getElementById('detail-song-name').textContent = song.song_name || '未知歌曲';
     document.getElementById('detail-artists').textContent = song.artists || '未知艺术家';
     document.getElementById('detail-genre').textContent = song.genre || '未知流派';
     document.getElementById('detail-popularity').textContent = `流行度: ${song.popularity || 50}`;
     
+    // 设置音频特征
     const features = song.audio_features || {};
     document.getElementById('danceability-value').textContent = (features.danceability || 0.5).toFixed(2);
     document.getElementById('danceability-bar').style.width = `${(features.danceability || 0.5) * 100}%`;
@@ -2121,6 +2160,7 @@ function displaySongDetail(song, explanation = null) {
     
     document.getElementById('recommendation-reason-text').innerHTML = String(reasonText);
     
+    // 设置播放按钮
     const playBtn = document.getElementById('play-now-btn');
     playBtn.dataset.songId = song.song_id;
     playBtn.onclick = function() {
@@ -2128,6 +2168,7 @@ function displaySongDetail(song, explanation = null) {
         document.getElementById('song-modal').classList.remove('active');
     };
     
+    // 显示模态框
     document.getElementById('song-modal').classList.add('active');
 }
 
@@ -3868,3 +3909,438 @@ async function searchGenreDirectly(genre) {
         return [];
     }
 }
+
+// ========== 评论功能函数 ==========
+
+async function loadSongComments(songId) {
+    console.log(`[评论] 加载歌曲评论: ${songId}`);
+    
+    currentSongIdForComments = songId;
+    commentsCurrentPage = 1;
+    
+    try {
+        const response = await fetch(
+            `${API_BASE_URL}/songs/${songId}/comments?page=${commentsCurrentPage}&sort_by=${commentsSortBy}&order=desc`
+        );
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            currentCommentsData = data.data;
+            displayComments(data.data);
+            
+            // 更新统计信息
+            updateCommentsStats(data.data.stats);
+        } else {
+            throw new Error(data.message || '获取评论失败');
+        }
+    } catch (error) {
+        console.error('[评论] 加载失败:', error);
+        showCommentsError();
+    }
+}
+
+function displayComments(data) {
+    const commentsList = document.getElementById('comments-list');
+    const pagination = document.getElementById('comments-pagination');
+    const sentimentChart = document.getElementById('sentiment-chart');
+    
+    if (!commentsList) return;
+    
+    // 显示/隐藏情感图表
+    if (data.stats.total_comments > 0) {
+        sentimentChart.style.display = 'grid';
+    } else {
+        sentimentChart.style.display = 'none';
+    }
+    
+    // 显示/隐藏分页
+    if (data.pagination.pages > 1) {
+        pagination.style.display = 'flex';
+        updatePaginationInfo(data.pagination);
+    } else {
+        pagination.style.display = 'none';
+    }
+    
+    // 渲染评论列表
+    if (!data.comments || data.comments.length === 0) {
+        commentsList.innerHTML = `
+            <div class="comments-empty">
+                <i class="fas fa-comment-slash"></i>
+                <p>暂无评论，快来发表第一条评论吧！</p>
+            </div>
+        `;
+        return;
+    }
+    
+    commentsList.innerHTML = data.comments.map(comment => {
+        const timeStr = comment.comment_time ? 
+            formatCommentTime(comment.comment_time) : '刚刚';
+        
+        const sentimentClass = getSentimentClass(comment.sentiment_score);
+        const sentimentText = getSentimentText(comment.sentiment_score);
+        
+        // 用户头像首字母
+        const userInitial = comment.user_nickname ? 
+            comment.user_nickname.charAt(0).toUpperCase() : 'A';
+        
+        return `
+            <div class="comment-item" data-comment-id="${comment.comment_id}">
+                <div class="comment-header">
+                    <div class="comment-user">
+                        <div class="user-avatar">${userInitial}</div>
+                        <div class="user-info">
+                            <h4>${comment.user_nickname}</h4>
+                            <span class="time">${timeStr}</span>
+                        </div>
+                    </div>
+                    <div class="comment-actions">
+                        <button class="comment-like-btn" onclick="likeComment(${comment.comment_id}, this)">
+                            <i class="fas fa-heart"></i>
+                            <span class="like-count">${comment.liked_count}</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="comment-content">
+                    ${escapeHtml(comment.content)}
+                </div>
+                ${comment.sentiment_score !== null ? `
+                    <div class="comment-sentiment ${sentimentClass}">
+                        <i class="fas ${SENTIMENT_ICONS[sentimentClass] || 'fa-meh'}"></i>
+                        ${sentimentText}
+                    </div>
+                ` : ''}
+            </div>
+            `;
+        }).join('');
+}
+
+function updateCommentsStats(stats) {
+    // 更新基本统计
+    const totalCommentsEl = document.getElementById('total-comments');
+    const totalLikesEl = document.getElementById('total-likes');
+    const sentimentScoreEl = document.getElementById('sentiment-score');
+    
+    if (totalCommentsEl) totalCommentsEl.textContent = stats.total_comments;
+    if (totalLikesEl) totalLikesEl.textContent = stats.total_likes;
+    if (sentimentScoreEl) sentimentScoreEl.textContent = Math.round(stats.avg_sentiment * 100) + '%';
+    
+    // 更新情感图表
+    const positiveCountEl = document.getElementById('positive-count');
+    const neutralCountEl = document.getElementById('neutral-count');
+    const negativeCountEl = document.getElementById('negative-count');
+    
+    if (positiveCountEl) positiveCountEl.textContent = stats.positive_count;
+    if (neutralCountEl) neutralCountEl.textContent = stats.neutral_count;
+    if (negativeCountEl) negativeCountEl.textContent = stats.negative_count;
+}
+
+function updatePaginationInfo(pagination) {
+    const currentPageEl = document.getElementById('current-page');
+    const totalPagesEl = document.getElementById('total-pages');
+    
+    if (currentPageEl) currentPageEl.textContent = pagination.page;
+    if (totalPagesEl) totalPagesEl.textContent = pagination.pages;
+    
+    const prevBtn = document.querySelector('#comments-pagination .page-btn:first-child');
+    const nextBtn = document.querySelector('#comments-pagination .page-btn:last-child');
+    
+    if (prevBtn) {
+        prevBtn.disabled = pagination.page === 1;
+    }
+    if (nextBtn) {
+        nextBtn.disabled = pagination.page === pagination.pages;
+    }
+}
+
+async function loadCommentsPage(direction) {
+    if (!currentSongIdForComments || !currentCommentsData) return;
+    
+    let newPage = commentsCurrentPage;
+    
+    if (direction === 'prev' && commentsCurrentPage > 1) {
+        newPage = commentsCurrentPage - 1;
+    } else if (direction === 'next' && commentsCurrentPage < commentsTotalPages) {
+        newPage = commentsCurrentPage + 1;
+    }
+    
+    if (newPage === commentsCurrentPage) return;
+    
+    commentsCurrentPage = newPage;
+    
+    try {
+        const response = await fetch(
+            `${API_BASE_URL}/songs/${currentSongIdForComments}/comments?page=${commentsCurrentPage}&sort_by=${commentsSortBy}&order=desc`
+        );
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            currentCommentsData = data.data;
+            displayComments(data.data);
+        }
+    } catch (error) {
+        console.error('[评论] 分页加载失败:', error);
+        showNotification('加载评论失败', 'error');
+    }
+}
+
+function sortComments(sortType) {
+    // 更新按钮状态
+    document.querySelectorAll('.sort-btn').forEach(btn => {
+        btn.classList.remove('active');
+        if (btn.dataset.sort === sortType) {
+            btn.classList.add('active');
+        }
+    });
+    
+    commentsSortBy = sortType;
+    commentsCurrentPage = 1;
+    
+    // 重新加载评论
+    if (currentSongIdForComments) {
+        loadSongComments(currentSongIdForComments);
+    }
+}
+
+async function submitComment() {
+    const textarea = document.getElementById('comment-textarea');
+    const content = textarea.value.trim();
+    const submitBtn = document.getElementById('submit-comment-btn');
+    
+    if (!content) {
+        showNotification('请输入评论内容', 'warning');
+        return;
+    }
+    
+    if (!currentSongIdForComments) {
+        showNotification('请先选择歌曲', 'warning');
+        return;
+    }
+    
+    // 获取当前用户
+    const userId = currentUser || 'anonymous_' + Date.now();
+    const nickname = currentUser ? `用户${currentUser}` : '匿名用户';
+    
+    // 禁用按钮防止重复提交
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 发布中...';
+    
+    try {
+        const commentData = {
+            content: content,
+            user_id: userId,
+            nickname: nickname
+        };
+        
+        const response = await fetch(
+            `${API_BASE_URL}/songs/${currentSongIdForComments}/comments`,
+            {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(commentData)
+            }
+        );
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            // 清空输入框
+            textarea.value = '';
+            updateCharCount();
+            
+            // 重新加载评论
+            await loadSongComments(currentSongIdForComments);
+            
+            showNotification('评论发布成功！', 'success');
+        } else {
+            throw new Error(data.message || '评论发布失败');
+        }
+    } catch (error) {
+        console.error('[评论] 发布失败:', error);
+        showNotification(`评论发布失败: ${error.message}`, 'error');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> 发布评论';
+    }
+}
+
+async function likeComment(commentId, button) {
+    if (!currentUser) {
+        showNotification('请先登录', 'info');
+        return;
+    }
+    
+    const isLiked = button.classList.contains('liked');
+    const action = isLiked ? 'cancel' : 'like';
+    
+    try {
+        const response = await fetch(
+            `${API_BASE_URL}/comments/${commentId}/like`,
+            {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ action: action, user_id: currentUser })
+            }
+        );
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            // 更新按钮状态
+            if (isLiked) {
+                button.classList.remove('liked');
+            } else {
+                button.classList.add('liked');
+                button.querySelector('i').className = 'fas fa-heart';
+            }
+            
+            // 更新点赞数
+            const countSpan = button.querySelector('.like-count');
+            if (countSpan) {
+                countSpan.textContent = data.data.liked_count;
+            }
+            
+            // 动画效果
+            button.querySelector('i').style.animation = 'heartBeat 0.3s';
+            setTimeout(() => {
+                button.querySelector('i').style.animation = '';
+            }, 300);
+        }
+    } catch (error) {
+        console.error('[评论] 点赞失败:', error);
+        showNotification('操作失败，请重试', 'error');
+    }
+}
+
+// 字符计数
+function initCommentCharCount() {
+    const textarea = document.getElementById('comment-textarea');
+    if (!textarea) return;
+    
+    textarea.addEventListener('input', updateCharCount);
+    textarea.addEventListener('focus', updateCharCount);
+    
+    // 初始更新
+    updateCharCount();
+}
+
+function updateCharCount() {
+    const textarea = document.getElementById('comment-textarea');
+    const charCount = document.getElementById('char-remaining');
+    const countDiv = document.querySelector('.char-count');
+    
+    if (!textarea || !charCount) return;
+    
+    const currentLength = textarea.value.length;
+    const maxLength = 1000;
+    const remaining = maxLength - currentLength;
+    
+    charCount.textContent = remaining;
+    
+    // 更新样式
+    if (countDiv) {
+        countDiv.classList.remove('warning', 'error');
+        
+        if (remaining <= 100 && remaining > 20) {
+            countDiv.classList.add('warning');
+        } else if (remaining <= 20) {
+            countDiv.classList.add('error');
+        }
+    }
+}
+
+// 辅助函数
+function formatCommentTime(timestamp) {
+    const now = new Date();
+    const commentTime = new Date(timestamp);
+    const diffMs = now - commentTime;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+    
+    if (diffMins < 1) return '刚刚';
+    if (diffMins < 60) return `${diffMins}分钟前`;
+    if (diffHours < 24) return `${diffHours}小时前`;
+    if (diffDays < 7) return `${diffDays}天前`;
+    
+    return commentTime.toLocaleDateString('zh-CN');
+}
+
+function getSentimentClass(score) {
+    if (score === null || score === undefined || score === 0) return 'sentiment-neutral';
+    if (score > 0.6) return 'sentiment-positive';
+    if (score < 0.4) return 'sentiment-negative';
+    return 'sentiment-neutral';
+}
+
+function getSentimentText(score) {
+    if (score === null || score === undefined || score === 0) return '中性';
+    if (score > 0.6) return `正面 (${Math.round(score * 100)}%)`;
+    if (score < 0.4) return `负面 (${Math.round(score * 100)}%)`;
+    return `中性 (${Math.round(score * 100)}%)`;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function showCommentsError() {
+    const commentsList = document.getElementById('comments-list');
+    if (!commentsList) return;
+    
+    commentsList.innerHTML = `
+        <div class="comments-empty">
+            <i class="fas fa-exclamation-circle"></i>
+            <p>评论加载失败</p>
+            <button class="btn btn-primary" onclick="loadSongComments('${currentSongIdForComments}')" 
+                    style="margin-top: 1rem; padding: 0.5rem 1rem;">
+                重试
+            </button>
+        </div>
+    `;
+}
+
+// 清理评论状态（当模态框关闭时）
+function clearCommentsState() {
+    const textarea = document.getElementById('comment-textarea');
+    if (textarea) textarea.value = '';
+    
+    const commentsList = document.getElementById('comments-list');
+    if (commentsList) {
+        commentsList.innerHTML = `
+            <div class="comments-empty">
+                <i class="fas fa-comment-slash"></i>
+                <p>暂无评论，快来发表第一条评论吧！</p>
+            </div>
+        `;
+    }
+    
+    updateCharCount();
+}
+
+// 为模态框关闭按钮添加清理功能
+document.addEventListener('DOMContentLoaded', function() {
+    const closeButtons = document.querySelectorAll('.close-modal');
+    closeButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            clearCommentsState();
+        });
+    });
+    
+    // 点击模态框背景关闭时也清理
+    const modals = document.querySelectorAll('.modal');
+    modals.forEach(modal => {
+        modal.addEventListener('click', function(e) {
+            if (e.target === this) {
+                clearCommentsState();
+            }
+        });
+    });
+});

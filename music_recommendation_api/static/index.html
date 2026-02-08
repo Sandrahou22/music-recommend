@@ -481,7 +481,88 @@
                     <h4>推荐理由</h4>
                     <p id="recommendation-reason-text">基于您的听歌历史和偏好推荐</p>
                 </div>
-                
+                <div class="comments-section" id="comments-section">
+                    <div class="comments-header">
+                        <h3><i class="fas fa-comments"></i> 歌曲评论</h3>
+                        <div class="comments-stats" id="comments-stats">
+                            <span class="stat-item"><i class="fas fa-comment"></i> <span id="total-comments">0</span> 条</span>
+                            <span class="stat-item"><i class="fas fa-thumbs-up"></i> <span id="total-likes">0</span> 赞</span>
+                            <span class="stat-item sentiment-stat-indicator">
+                                <i class="fas fa-smile"></i> <span id="sentiment-score">50%</span> 正面
+                            </span>
+                        </div>
+                    </div>
+                    
+                    <!-- 情感统计图表 -->
+                    <div class="sentiment-chart" id="sentiment-chart">
+                        <div class="sentiment-stat stat-positive">
+                            <div class="stat-value" id="positive-count">0</div>
+                            <div class="stat-label">正面评论</div>
+                        </div>
+                        <div class="sentiment-stat stat-neutral">
+                            <div class="stat-value" id="neutral-count">0</div>
+                            <div class="stat-label">中性评论</div>
+                        </div>
+                        <div class="sentiment-stat stat-negative">
+                            <div class="stat-value" id="negative-count">0</div>
+                            <div class="stat-label">负面评论</div>
+                        </div>
+                    </div>
+                    
+                    <!-- 评论排序 -->
+                    <div class="comments-sort">
+                        <button class="sort-btn active" data-sort="time" onclick="sortComments('time')">
+                            <i class="fas fa-clock"></i> 最新
+                        </button>
+                        <button class="sort-btn" data-sort="likes" onclick="sortComments('likes')">
+                            <i class="fas fa-thumbs-up"></i> 最热
+                        </button>
+                        <button class="sort-btn" data-sort="sentiment" onclick="sortComments('sentiment')">
+                            <i class="fas fa-smile"></i> 情感
+                        </button>
+                    </div>
+                    
+                    <!-- 评论列表 -->
+                    <div class="comments-list" id="comments-list">
+                        <div class="comments-empty">
+                            <i class="fas fa-comment-slash"></i>
+                            <p>暂无评论，快来发表第一条评论吧！</p>
+                        </div>
+                    </div>
+                    
+                    <!-- 评论分页 -->
+                    <div class="comments-pagination" id="comments-pagination">
+                        <button class="page-btn" onclick="loadCommentsPage('prev')" disabled>
+                            <i class="fas fa-chevron-left"></i>
+                        </button>
+                        <span class="page-info">第 <span id="current-page">1</span> 页 / 共 <span id="total-pages">1</span> 页</span>
+                        <button class="page-btn" onclick="loadCommentsPage('next')" disabled>
+                            <i class="fas fa-chevron-right"></i>
+                        </button>
+                    </div>
+                    
+                    <!-- 发表评论表单 -->
+                    <div class="add-comment-form" id="add-comment-form">
+                        <div class="form-header">
+                            <i class="fas fa-edit"></i>
+                            <h4>发表评论</h4>
+                        </div>
+                        <textarea 
+                            class="comment-textarea" 
+                            id="comment-textarea" 
+                            placeholder="分享您对这首歌的看法..."
+                            maxlength="1000"
+                        ></textarea>
+                        <div class="form-footer">
+                            <div class="char-count">
+                                还可以输入 <span id="char-remaining">1000</span> 字
+                            </div>
+                            <button class="submit-comment-btn" id="submit-comment-btn" onclick="submitComment()">
+                                <i class="fas fa-paper-plane"></i> 发布评论
+                            </button>
+                        </div>
+                    </div>
+                </div>
                 <div class="song-actions">
                     <button class="btn btn-primary" id="play-now-btn">
                         <i class="fas fa-play"></i> 立即播放

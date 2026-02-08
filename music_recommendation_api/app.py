@@ -5,6 +5,7 @@ import time
 import logging
 from logging.handlers import RotatingFileHandler
 
+from routes.comments import bp as comments_bp
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
@@ -99,6 +100,7 @@ def create_app(config_name: str = None):
     app.register_blueprint(recommendation.bp, url_prefix='/api/v1')
     app.register_blueprint(song.bp, url_prefix='/api/v1/songs')
     app.register_blueprint(user.bp, url_prefix='/api/v1/users')
+    app.register_blueprint(comments_bp, url_prefix='/api/v1')
     
     # 注册蓝图（管理员）
     from routes import admin
