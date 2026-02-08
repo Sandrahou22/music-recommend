@@ -104,6 +104,30 @@ def create_app(config_name: str = None):
     from routes import admin
     app.register_blueprint(admin.bp, url_prefix='/api/v1/admin')
 
+    
+    # ========== 添加系统统计端点 ==========
+    @app.route('/api/v1/system/info', methods=['GET'])
+    def get_system_info():
+        """获取系统信息"""
+        from recommender_service import recommender_service
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "name": "智能音乐推荐系统",
+                "version": "1.0.0",
+                "status": "running",
+                "database": "connected" if recommender_service._engine else "disconnected",
+                "model_loaded": recommender_service._model_loaded,
+                "total_users": 43355,  # 可以从数据库获取
+                "total_songs": 16588,  # 可以从数据库获取
+                "uptime": time.time() - app.start_time if hasattr(app, 'start_time') else 0
+            }
+        })
+    
+    # 记录启动时间
+    app.start_time = time.time()
+
     # 错误处理
     register_error_handlers(app)
     

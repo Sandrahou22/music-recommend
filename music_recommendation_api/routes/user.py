@@ -163,13 +163,17 @@ def register_user():
             if check:
                 return error(message="用户ID已存在", code=400)
         
-        # 【关键修复】使用 engine.begin() 进行事务
+        # 【关键修复】获取当前时间
+        from datetime import datetime
+        current_time = datetime.now()
+        
+        # 【关键修复】使用 engine.begin() 进行事务，并返回 created_at
         with engine.begin() as conn:
             insert_query = """
             INSERT INTO enhanced_user_features 
-            (user_id, nickname, gender, age, province, city, source, activity_level)
+            (user_id, nickname, gender, age, province, city, source, activity_level, created_at, updated_at)
             VALUES 
-            (:user_id, :nickname, :gender, :age, :province, :city, :source, '新用户')
+            (:user_id, :nickname, :gender, :age, :province, :city, :source, '新用户', :created_at, :updated_at)
             """
             
             conn.execute(text(insert_query), {
@@ -179,12 +183,28 @@ def register_user():
                 "age": data.get('age'),
                 "province": data.get('province', ''),
                 "city": data.get('city', ''),
-                "source": data.get('source', 'internal')
+                "source": data.get('source', 'internal'),
+                "created_at": current_time,
+                "updated_at": current_time
             })
-            # 不需要手动commit，engine.begin()会自动提交
         
         logger.info(f"新用户注册成功 | user_id={data['user_id']}")
-        return success(message="注册成功", data={"user_id": data['user_id']})
+        
+        # 【关键修复】返回包含创建时间的完整用户信息
+        return success({
+            "message": "注册成功",
+            "user": {
+                "user_id": data['user_id'],
+                "nickname": data['nickname'],
+                "gender": data.get('gender'),
+                "age": data.get('age'),
+                "province": data.get('province', ''),
+                "city": data.get('city', ''),
+                "source": data.get('source', 'internal'),
+                "created_at": current_time.isoformat(),  # 返回 ISO 格式时间
+                "activity_level": "新用户"
+            }
+        })
         
     except Exception as e:
         logger.error(f"用户注册失败: {e}")

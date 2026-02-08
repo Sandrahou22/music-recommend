@@ -8,10 +8,9 @@ let isPlaying = false;
 let currentSongIndex = 0;
 let playerInterval;
 
-// 播放追踪相关变量
-let playStartTime = null;
-let hasReportedListen = false;
-let currentPlayingSongId = null;
+let isInitialized = false;
+let genreEventsBound = false;
+let loadMoreInitialized = false;
 
 // 音频播放器全局变量
 let audioPlayer = null;
@@ -37,18 +36,17 @@ let audioContext = null;
 let analyser = null;
 let visualizerInterval = null;
 
-// 如果喜欢这个方案，使用7分类：
-const DISPLAY_GENRES = ['流行', '摇滚', '民谣', '电子', '说唱', '金属', '其他'];
-
 const REVERSE_MAP = {
     '流行': ['华语流行', '欧美流行', '日本流行', 'Pop', 'K-Pop'],
     '摇滚': ['Rock', 'Punk', '摇滚'],
-    '民谣': ['Folk', '民谣', 'Country'], // 独立出来
     '电子': ['Electronic', '电子'],
-    '说唱': ['Rap', '说唱'],
     '金属': ['Metal'],
-    '其他': ['Jazz', 'Blues', 'Latin', 'New Age', 'World', 'Reggae', 'RnB', '翻唱', '现场', '影视原声']
+    '说唱': ['Rap', '说唱'], 
+    '民谣': ['Folk', '民谣', 'Country'],
+    '其他': ['RnB', 'Jazz', 'Blues', 'Latin', 'New Age', 'World', 'Reggae', '翻唱', '现场', '影视原声']
 };
+
+const DISPLAY_GENRES = ['流行', '摇滚', '电子', '金属', '说唱', '民谣', '其他'];
 
 // API配置
 const API_BASE_URL = "http://127.0.0.1:5000/api/v1";
@@ -123,6 +121,11 @@ async function checkSongAudioStatus(songId) {
 
 // ========== 初始化应用 ==========
 function initApp() {
+    if (isInitialized) {
+        console.log('[初始化] 已初始化，跳过');
+        return;
+    }
+    
     console.log('[初始化] 开始');
     
     checkApiHealth();
@@ -151,6 +154,7 @@ function initApp() {
     initTheme();
     initProgressBarDrag();
     
+    isInitialized = true;
     console.log('[初始化] 完成');
 }
 
@@ -343,6 +347,8 @@ function updateProgressFromMouse(e, progressBar) {
 
 // ========== 事件监听器设置 ==========
 function setupEventListeners() {
+    console.log('[事件监听] 开始设置');
+    
     // 导航栏切换
     document.querySelectorAll('.nav-link').forEach(link => {
         link.addEventListener('click', function(e) {
@@ -373,23 +379,189 @@ function setupEventListeners() {
     });
     
     // 算法选择
-    document.getElementById('algorithm-select').addEventListener('change', function() {
-        currentAlgorithm = this.value;
-    });
+    const algorithmSelect = document.getElementById('algorithm-select');
+    if (algorithmSelect) {
+        algorithmSelect.addEventListener('change', function() {
+            currentAlgorithm = this.value;
+        });
+    }
     
-    document.getElementById('rec-algorithm-select').addEventListener('change', function() {
-        currentAlgorithm = this.value;
-    });
+    const recAlgorithmSelect = document.getElementById('rec-algorithm-select');
+    if (recAlgorithmSelect) {
+        recAlgorithmSelect.addEventListener('change', function() {
+            currentAlgorithm = this.value;
+        });
+    }
     
     // 推荐数量选择
-    document.getElementById('rec-count-select').addEventListener('change', function() {
-        // 将在获取推荐时使用
+    const recCountSelect = document.getElementById('rec-count-select');
+    if (recCountSelect) {
+        recCountSelect.addEventListener('change', function() {
+            console.log('推荐数量改为:', this.value);
+        });
+    }
+    
+    // 播放器控制
+    const playBtn = document.getElementById('play-btn');
+    if (playBtn) {
+        playBtn.addEventListener('click', togglePlayback);
+    }
+    
+    const prevBtn = document.getElementById('prev-btn');
+    if (prevBtn) {
+        prevBtn.addEventListener('click', playPrevious);
+    }
+    
+    const nextBtn = document.getElementById('next-btn');
+    if (nextBtn) {
+        nextBtn.addEventListener('click', playNext);
+    }
+    
+    // 音量控制
+    const volumeSlider = document.getElementById('volume-slider');
+    if (volumeSlider) {
+        volumeSlider.addEventListener('input', updateVolume);
+    }
+    
+    // 模态框关闭
+    document.querySelectorAll('.close-modal').forEach(btn => {
+        btn.addEventListener('click', function() {
+            this.closest('.modal').classList.remove('active');
+        });
     });
     
-    // 流派筛选
-    // script.js 中 setupEventListeners 函数修改
+    // 点击模态框背景关闭
+    document.querySelectorAll('.modal').forEach(modal => {
+        modal.addEventListener('click', function(e) {
+            if (e.target === this) {
+                this.classList.remove('active');
+            }
+        });
+    });
+    
+    // 【关键修复】保存偏好设置按钮
+    const savePrefBtn = document.getElementById('save-preferences');
+    if (savePrefBtn) {
+        console.log('[事件监听] 找到保存偏好按钮');
+        savePrefBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('[保存偏好] 按钮被点击');
+            savePreferences();
+        });
+    } else {
+        console.error('[事件监听] 找不到保存偏好按钮');
+    }
+    
+    // 多样性滑块
+    const diversitySlider = document.getElementById('diversity-slider');
+    if (diversitySlider) {
+        diversitySlider.addEventListener('input', function() {
+            const value = parseInt(this.value);
+            const labels = ['低', '较低', '中等', '较高', '高'];
+            const labelIndex = Math.floor(value / 2);
+            const valueEl = document.getElementById('diversity-value');
+            if (valueEl) {
+                valueEl.textContent = labels[labelIndex] || '中等';
+            }
+        });
+    }
+    
+    // 默认算法选择
+    const defaultAlgorithmSelect = document.getElementById('default-algorithm');
+    if (defaultAlgorithmSelect) {
+        defaultAlgorithmSelect.addEventListener('change', function() {
+            console.log('默认算法改为:', this.value);
+        });
+    }
+    
+    // 默认数量选择
+    const defaultCountSelect = document.getElementById('default-count');
+    if (defaultCountSelect) {
+        defaultCountSelect.addEventListener('change', function() {
+            console.log('默认数量改为:', this.value);
+        });
+    }
+    
+    // 模态框按钮事件
+    const playNowBtn = document.getElementById('play-now-btn');
+    if (playNowBtn) {
+        playNowBtn.addEventListener('click', function() {
+            const songId = this.dataset.songId || currentPlayingSongId;
+            if (songId) {
+                playSong(songId);
+                const modal = document.getElementById('song-modal');
+                if (modal) modal.classList.remove('active');
+                showNotification('开始播放', 'success');
+            }
+        });
+    }
+    
+    const addToPlaylistBtn = document.getElementById('add-to-playlist-btn');
+    if (addToPlaylistBtn) {
+        addToPlaylistBtn.addEventListener('click', function() {
+            const songId = document.getElementById('play-now-btn')?.dataset.songId;
+            if (songId) {
+                addToPlaylist(songId);
+            }
+        });
+    }
+    
+    const similarSongsBtn = document.getElementById('similar-songs-btn');
+    if (similarSongsBtn) {
+        similarSongsBtn.addEventListener('click', function() {
+            const songId = document.getElementById('play-now-btn')?.dataset.songId;
+            if (songId) {
+                showNotification('正在查找相似歌曲...', 'info');
+                const modal = document.getElementById('song-modal');
+                if (modal) modal.classList.remove('active');
+                loadSimilarSongsGraph(songId);
+            }
+        });
+    }
+    
+    // A/B测试按钮
+    const abTestBtn = document.querySelector('button[onclick="toggleABTest()"]');
+    if (abTestBtn) {
+        abTestBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleABTest();
+        });
+    }
+    
+    // 注册表单提交
+    const registerForm = document.getElementById('register-form');
+    if (registerForm) {
+        registerForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            handleRegister(e);
+        });
+    }
+    
+    // 用户ID生成按钮
+    const generateUserIdBtn = document.querySelector('button[onclick="generateUserId()"]');
+    if (generateUserIdBtn) {
+        generateUserIdBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            generateUserId();
+        });
+    }
+    
+    // 注册模态框显示
+    const registerModalBtn = document.querySelector('button[onclick="showRegisterModal()"]');
+    if (registerModalBtn) {
+        registerModalBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            showRegisterModal();
+        });
+    }
+    
+    // 事件委托：歌曲卡片点击事件
     document.addEventListener('click', function(e) {
-        // 改为：只有点击详情按钮才显示详情页
+        // 点击详情按钮
         if (e.target.closest('.detail-btn')) {
             e.stopPropagation();
             const songCard = e.target.closest('.song-card');
@@ -412,7 +584,6 @@ function setupEventListeners() {
                 const songId = songCard.dataset.songId;
                 const hasAudio = songCard.dataset.hasAudio === "true";
                 
-                // 【关键】立即检查是否有音频
                 if (!hasAudio) {
                     showNotification('该歌曲暂无音频文件，仅可查看详情', 'info');
                     return;
@@ -420,7 +591,7 @@ function setupEventListeners() {
                 
                 playSong(songId);
                 
-                // 【修复】播放按钮临时禁用，防止重复点击
+                // 播放按钮临时禁用，防止重复点击
                 const playBtn = songCard.querySelector('.play-song-btn');
                 if (playBtn && !playBtn.disabled) {
                     playBtn.disabled = true;
@@ -431,7 +602,7 @@ function setupEventListeners() {
             }
         }
         
-        // 点击反馈按钮（上方的喜欢按钮）
+        // 点击反馈按钮（喜欢按钮）
         if (e.target.closest('.feedback-btn')) {
             e.stopPropagation();
             const songCard = e.target.closest('.song-card');
@@ -439,64 +610,6 @@ function setupEventListeners() {
                 const songId = songCard.dataset.songId;
                 showFeedbackModal(songId);
             }
-        }
-    });
-    
-    // 播放器控制
-    document.getElementById('play-btn').addEventListener('click', togglePlayback);
-    document.getElementById('prev-btn').addEventListener('click', playPrevious);
-    document.getElementById('next-btn').addEventListener('click', playNext);
-    
-    // 模态框关闭
-    document.querySelectorAll('.close-modal').forEach(btn => {
-        btn.addEventListener('click', function() {
-            this.closest('.modal').classList.remove('active');
-        });
-    });
-    
-    // 点击模态框背景关闭
-    document.querySelectorAll('.modal').forEach(modal => {
-        modal.addEventListener('click', function(e) {
-            if (e.target === this) {
-                this.classList.remove('active');
-            }
-        });
-    });
-    
-    // 保存偏好设置
-    document.getElementById('save-preferences').addEventListener('click', savePreferences);
-    
-    // 多样性滑块
-    document.getElementById('diversity-slider').addEventListener('input', function() {
-        const value = parseInt(this.value);
-        const labels = ['低', '较低', '中等', '较高', '高'];
-        const labelIndex = Math.floor(value / 2);
-        document.getElementById('diversity-value').textContent = labels[labelIndex] || '中等';
-    });
-    
-    // 模态框按钮事件
-    document.getElementById('play-now-btn')?.addEventListener('click', function() {
-        const songId = this.dataset.songId || currentPlayingSongId;
-        if (songId) {
-            playSong(songId);
-            document.getElementById('song-modal').classList.remove('active');
-            showNotification('开始播放', 'success');
-        }
-    });
-
-    document.getElementById('add-to-playlist-btn')?.addEventListener('click', function() {
-        const songId = document.getElementById('play-now-btn').dataset.songId;
-        if (songId) {
-            addToPlaylist(songId);
-        }
-    });
-
-    document.getElementById('similar-songs-btn')?.addEventListener('click', function() {
-        const songId = document.getElementById('play-now-btn').dataset.songId;
-        if (songId) {
-            showNotification('正在查找相似歌曲...', 'info');
-            document.getElementById('song-modal').classList.remove('active');
-            loadSimilarSongsGraph(songId);
         }
     });
     
@@ -552,6 +665,70 @@ function setupEventListeners() {
                 break;
         }
     });
+    
+    // 【新增】探索页面搜索功能
+    const searchExecuteBtn = document.getElementById('search-btn-execute');
+    if (searchExecuteBtn) {
+        searchExecuteBtn.addEventListener('click', function() {
+            const searchInput = document.getElementById('explore-search-input');
+            if (searchInput && searchInput.value.trim()) {
+                performSearch(searchInput.value.trim());
+            } else {
+                showNotification('请输入搜索内容', 'warning');
+            }
+        });
+    }
+    
+    const searchInput = document.getElementById('explore-search-input');
+    if (searchInput) {
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const query = searchInput.value.trim();
+                if (query) {
+                    performSearch(query);
+                }
+            }
+        });
+    }
+    
+    const clearSearchBtn = document.getElementById('clear-search-btn');
+    if (clearSearchBtn) {
+        clearSearchBtn.addEventListener('click', clearSearch);
+    }
+    
+    // 【新增】加载更多按钮
+    const loadMoreBtn = document.getElementById('load-more-btn');
+    if (loadMoreBtn) {
+        loadMoreBtn.addEventListener('click', async () => {
+            console.log('[点击] 加载更多');
+            
+            // 获取当前激活的流派
+            const activeBtn = document.querySelector('.genre-tag-btn.active');
+            const currentGenre = activeBtn ? activeBtn.dataset.genre : 'all';
+            
+            loadMoreBtn.disabled = true;
+            loadMoreBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 加载中...';
+            
+            try {
+                if (currentGenre === 'all') {
+                    await loadMoreHotSongs();
+                } else {
+                    await loadMoreByGenre(currentGenre);
+                }
+            } finally {
+                loadMoreBtn.disabled = false;
+                loadMoreBtn.innerHTML = '<i class="fas fa-plus"></i> 加载更多';
+            }
+        });
+    }
+    
+    console.log('[事件监听] 设置完成');
+
+    // 绑定流派标签点击事件
+    setTimeout(() => {
+        bindGenreEvents();
+        initLoadMore();
+    }, 1000); // 延迟1秒确保DOM加载完成
 }
 
 // ========== 播放列表功能 ==========
@@ -1165,20 +1342,6 @@ function displayHotSongs(songs) {
     `).join('');
 }
 
-function displayMockHotSongs() {
-    const mockHotSongs = [
-        {
-            song_id: "hot_001",
-            song_name: "孤勇者",
-            artists: "陈奕迅",
-            genre: "流行",
-            popularity: 95
-        }
-    ];
-    
-    displayHotSongs(mockHotSongs);
-}
-
 // ========== 用户历史记录 ==========
 async function loadUserHistory(userId) {
     try {
@@ -1339,24 +1502,28 @@ async function loadUserProfile(userId) {
 }
 
 function displayUserProfile(profile) {
+    console.log('显示用户画像:', profile);
+    
+    // 1. 用户ID
     document.getElementById('profile-user-id').textContent = profile.user_id || '-';
     document.getElementById('profile-user-id-large').textContent = profile.user_id || '-';
     
+    // 2. 听歌数量
     const nSongs = parseInt(profile.n_songs) || 0;
     document.getElementById('total-listens').textContent = nSongs;
+    document.getElementById('profile-song-count').textContent = nSongs > 0 ? nSongs : '-';
     
+    // 3. 交互次数
     let totalInteractions = parseInt(profile.total_interactions);
     if (isNaN(totalInteractions) || totalInteractions === 0) {
         totalInteractions = nSongs;
     }
-    
     const interactionsEl = document.getElementById('total-interactions');
     if (interactionsEl) {
         interactionsEl.textContent = totalInteractions;
     }
     
-    document.getElementById('profile-song-count').textContent = nSongs > 0 ? nSongs : '-';
-    
+    // 4. 流行度偏好
     const popPref = parseFloat(profile.avg_popularity) || 50;
     let popPrefText = '中等偏好';
     if (popPref < 30) popPrefText = '探索型用户（偏爱冷门）';
@@ -1369,6 +1536,7 @@ function displayUserProfile(profile) {
     document.getElementById('profile-pop-pref').textContent = popPrefText;
     document.getElementById('avg-popularity').textContent = Math.round(popPref);
     
+    // 5. 活跃等级
     const activityEl = document.getElementById('activity-level');
     if (activityEl) {
         const level = profile.activity_level || '普通用户';
@@ -1380,6 +1548,7 @@ function displayUserProfile(profile) {
         else if (level.includes('新')) activityEl.style.color = '#2196F3';
     }
     
+    // 6. 多样性
     const diversityEl = document.getElementById('diversity-ratio');
     if (diversityEl) {
         const diversity = parseFloat(profile.diversity_ratio);
@@ -1392,6 +1561,7 @@ function displayUserProfile(profile) {
         }
     }
     
+    // 7. 流派偏好
     const genresContainer = document.getElementById('profile-genres');
     let genres = profile.top_genres || [];
     
@@ -1413,12 +1583,42 @@ function displayUserProfile(profile) {
         genresContainer.innerHTML = '<span class="no-data">暂无数据</span>';
     }
     
+    // 8. 注册时间（使用created_at字段）
+    const joinDateEl = document.getElementById('profile-join-date');
+    if (joinDateEl) {
+        if (profile.created_at) {
+            try {
+                const regDate = new Date(profile.created_at);
+                joinDateEl.textContent = `注册时间: ${regDate.toLocaleDateString('zh-CN')} ${regDate.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}`;
+            } catch (e) {
+                joinDateEl.textContent = `注册时间: ${profile.created_at}`;
+            }
+        } else if (profile.registered_at) {
+            try {
+                const regDate = new Date(profile.registered_at);
+                joinDateEl.textContent = `注册时间: ${regDate.toLocaleDateString('zh-CN')} ${regDate.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}`;
+            } catch (e) {
+                joinDateEl.textContent = `注册时间: ${profile.registered_at}`;
+            }
+        } else {
+            // 根据用户ID估算
+            if (profile.user_id && profile.user_id.startsWith('new_')) {
+                joinDateEl.textContent = '注册时间: 今日';
+            } else {
+                joinDateEl.textContent = '注册时间: 2023-01-01';
+            }
+        }
+    }
+    
+    // 9. 新用户标识
     const popPrefEl = document.getElementById('profile-pop-pref');
     if (popPrefEl && (profile.is_cold_start || nSongs < 5)) {
         if (nSongs < 50 && !popPrefEl.innerHTML.includes('新用户')) {
             popPrefEl.innerHTML += ' <span class="cold-badge">新用户</span>';
         }
     }
+    
+    console.log('用户画像显示完成');
 }
 
 // ========== 播放控制 ==========
@@ -1979,23 +2179,67 @@ async function submitFeedback(songId, action) {
 }
 
 // ========== 其他功能 ==========
-function savePreferences() {
-    const defaultAlgorithm = document.getElementById('default-algorithm').value;
-    const defaultCount = document.getElementById('default-count').value;
-    const diversityValue = document.getElementById('diversity-slider').value;
+async function savePreferences() {
+    console.log('[保存偏好] 开始保存');
     
-    localStorage.setItem('musicRec_preferences', JSON.stringify({
-        defaultAlgorithm,
-        defaultCount,
-        diversityValue
-    }));
-    
-    document.getElementById('algorithm-select').value = defaultAlgorithm;
-    document.getElementById('rec-algorithm-select').value = defaultAlgorithm;
-    document.getElementById('rec-count-select').value = defaultCount;
-    currentAlgorithm = defaultAlgorithm;
-    
-    showNotification('偏好设置已保存', 'success');
+    try {
+        const defaultAlgorithm = document.getElementById('default-algorithm').value;
+        const defaultCount = document.getElementById('default-count').value;
+        const diversityValue = document.getElementById('diversity-slider').value;
+        
+        // 更新前端设置
+        document.getElementById('algorithm-select').value = defaultAlgorithm;
+        document.getElementById('rec-algorithm-select').value = defaultAlgorithm;
+        document.getElementById('rec-count-select').value = defaultCount;
+        currentAlgorithm = defaultAlgorithm;
+        
+        // 保存到本地存储
+        const preferences = {
+            defaultAlgorithm,
+            defaultCount,
+            diversityValue,
+            savedAt: new Date().toISOString()
+        };
+        
+        localStorage.setItem('musicRec_preferences', JSON.stringify(preferences));
+        
+        // 尝试保存到后端（如果有API）
+        try {
+            if (currentUser && currentUser !== '1001') { // 不是默认用户
+                const response = await fetch(`${API_BASE_URL}/users/${currentUser}/preferences`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        default_algorithm: defaultAlgorithm,
+                        default_count: parseInt(defaultCount),
+                        diversity_value: parseInt(diversityValue)
+                    })
+                });
+                
+                if (response.ok) {
+                    console.log('[保存偏好] 已保存到服务器');
+                }
+            }
+        } catch (error) {
+            console.log('[保存偏好] 服务器保存失败，使用本地存储:', error);
+        }
+        
+        showNotification('偏好设置已保存', 'success');
+        
+        // 记录活动
+        addActivity(
+            'settings',
+            `更新了偏好设置：${getAlgorithmName(defaultAlgorithm)}，${defaultCount}首`,
+            'fa-cogs',
+            '#7209b7'
+        );
+        
+        console.log('[保存偏好] 保存完成:', preferences);
+        
+    } catch (error) {
+        console.error('[保存偏好] 保存失败:', error);
+        showNotification('保存失败，请重试', 'error');
+    }
 }
 
 const GENRE_STATS = {
@@ -2015,15 +2259,18 @@ function loadGenres() {
         return;
     }
     
-    // 生成 HTML（确保有 onclick 内联事件作为兜底）
-    let html = `<button class="genre-tag-btn active" onclick="handleGenreClick('all', this)" data-genre="all">全部</button>`;
+    // 生成 HTML
+    let html = `<button class="genre-tag-btn active" data-genre="all">全部</button>`;
     
     DISPLAY_GENRES.forEach(genre => {
-        html += `<button class="genre-tag-btn" onclick="handleGenreClick('${genre}', this)" data-genre="${genre}">${genre}</button>`;
+        html += `<button class="genre-tag-btn" data-genre="${genre}">${genre}</button>`;
     });
     
     container.innerHTML = html;
     console.log('[成功] 流派标签已渲染，共', DISPLAY_GENRES.length + 1, '个');
+    
+    // 绑定事件
+    bindGenreEvents();
 }
 
 function handleGenreClick(genre, btnElement) {
@@ -2039,19 +2286,26 @@ function handleGenreClick(genre, btnElement) {
 
 // 【新增】绑定流派标签点击事件
 function bindGenreEvents() {
+    if (genreEventsBound) {
+        console.log('[流派事件] 已绑定，跳过');
+        return;
+    }
+    
     const container = document.getElementById('genre-tags');
-    if (!container) return;
+    if (!container) {
+        console.error('[错误] 找不到容器 #genre-tags');
+        return;
+    }
     
     container.addEventListener('click', function(e) {
-        // 使用事件委托，点击按钮时触发
         if (e.target.classList.contains('genre-tag-btn')) {
             e.preventDefault();
             e.stopPropagation();
             
             const genre = e.target.dataset.genre;
-            console.log('点击流派:', genre); // 调试用
+            console.log('点击流派:', genre);
             
-            // UI状态更新：移除其他active，添加当前active
+            // UI状态更新
             document.querySelectorAll('.genre-tag-btn').forEach(btn => {
                 btn.classList.remove('active');
             });
@@ -2060,12 +2314,11 @@ function bindGenreEvents() {
             // 调用筛选函数
             if (typeof filterSongsByGenre === 'function') {
                 filterSongsByGenre(genre);
-            } else {
-                console.error('filterSongsByGenre 函数未定义');
             }
         }
     });
     
+    genreEventsBound = true;
     console.log('流派标签事件绑定完成');
 }
 
@@ -2075,60 +2328,282 @@ async function filterSongsByGenre(genre) {
     console.log(`[流派筛选] 选择: ${genre}`);
     
     const container = document.getElementById('explore-container');
+    const loadMoreContainer = document.getElementById('explore-load-more');
+    
     if (!container) return;
     
-    // 隐藏搜索结果信息
-    const resultsInfo = document.getElementById('explore-results-info');
-    if (resultsInfo) resultsInfo.style.display = 'none';
-    
-    // 隐藏加载更多
-    const loadMoreContainer = document.getElementById('explore-load-more');
-    if (loadMoreContainer) loadMoreContainer.style.display = 'none';
+    // 隐藏加载更多按钮（先隐藏，后面再决定是否显示）
+    if (loadMoreContainer) {
+        loadMoreContainer.style.display = 'none';
+    }
     
     // 如果是"全部"，显示热门歌曲
     if (genre === 'all') {
         if (currentHotSongs.length > 0) {
             displayExploreSongs(currentHotSongs);
+            // 显示加载更多按钮
+            if (loadMoreContainer) {
+                loadMoreContainer.style.display = 'flex';
+                // 绑定加载更多热门歌曲的事件
+                bindLoadMoreForAll();
+            }
         } else {
             await loadHotSongs('all');
         }
         return;
     }
     
-    // 获取该流派对应的原始流派
-    const sourceGenres = REVERSE_MAP[genre];
-    if (!sourceGenres) {
-        container.innerHTML = '<div class="empty-state"><p>未知分类</p></div>';
-        return;
-    }
-    
-    console.log(`[流派筛选] ${genre} -> 查询:`, sourceGenres);
-    
     // 显示加载中
     container.innerHTML = '<div class="empty-state"><i class="fas fa-spinner fa-spin"></i><p>正在筛选...</p></div>';
     
     try {
-        // 尝试从后端获取
-        const genreParam = encodeURIComponent(sourceGenres.join(','));
-        const response = await fetch(`${API_BASE_URL}/songs/by-genre?genre=${genreParam}&limit=50`);
+        const sourceGenres = REVERSE_MAP[genre];
+        if (!sourceGenres) {
+            container.innerHTML = '<div class="empty-state"><p>未知分类</p></div>';
+            return;
+        }
         
-        if (response.ok) {
-            const data = await response.json();
-            if (data.success && data.data.songs.length > 0) {
-                displayExploreSongs(data.data.songs);
-                showNotification(`${genre}: 找到 ${data.data.songs.length} 首歌曲`, 'success');
-            } else {
-                // 后端无数据，从前端过滤
-                await fallbackGenreFilter(genre, sourceGenres);
+        console.log(`[流派筛选] ${genre} -> 查询:`, sourceGenres);
+        
+        // 使用第一个子流派作为查询条件（确保精确匹配）
+        const genreParam = encodeURIComponent(sourceGenres[0]); // 使用第一个流派
+        const response = await fetch(`${API_BASE_URL}/songs/by-genre?genre=${genreParam}&limit=30`);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success && data.data.songs.length > 0) {
+            displayExploreSongs(data.data.songs);
+            
+            // 如果有更多数据，显示加载更多按钮
+            if (data.data.has_more && loadMoreContainer) {
+                loadMoreContainer.style.display = 'flex';
+                // 绑定加载更多流派歌曲的事件
+                bindLoadMoreForGenre(genre, data.data.songs.length);
             }
+            
+            showNotification(`${genre}: 找到 ${data.data.songs.length} 首歌曲`, 'success');
         } else {
-            // 后端错误，从前端过滤
-            await fallbackGenreFilter(genre, sourceGenres);
+            container.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-music"></i>
+                    <p>暂无"${genre}"流派的歌曲</p>
+                    <p style="color: var(--text-secondary); margin-top: 0.5rem;">
+                        尝试浏览其他流派
+                    </p>
+                </div>
+            `;
         }
     } catch (error) {
         console.error('[流派筛选] 错误:', error);
-        await fallbackGenreFilter(genre, sourceGenres);
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-exclamation-circle"></i>
+                <p>筛选失败: ${error.message}</p>
+                <button class="btn btn-primary" onclick="filterSongsByGenre('all')" style="margin-top:1rem">
+                    返回热门歌曲
+                </button>
+            </div>
+        `;
     }
+}
+
+// 绑定流派加载更多事件
+function bindLoadMoreForGenre(genre, currentCount) {
+    const loadMoreBtn = document.getElementById('load-more-btn');
+    if (!loadMoreBtn) return;
+    
+    // 移除旧事件
+    loadMoreBtn.replaceWith(loadMoreBtn.cloneNode(true));
+    const newBtn = document.getElementById('load-more-btn');
+    
+    newBtn.addEventListener('click', async () => {
+        console.log(`[加载更多] 流派: ${genre}, 当前: ${currentCount}`);
+        
+        newBtn.disabled = true;
+        newBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 加载中...';
+        
+        try {
+            const sourceGenres = REVERSE_MAP[genre];
+            const genreParam = encodeURIComponent(sourceGenres[0]);
+            const response = await fetch(
+                `${API_BASE_URL}/songs/by-genre?genre=${genreParam}&limit=20&offset=${currentCount}`
+            );
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success && data.data.songs.length > 0) {
+                    // 追加显示歌曲
+                    const container = document.getElementById('explore-container');
+                    const html = data.data.songs.map(song => createExploreSongCard(song)).join('');
+                    container.insertAdjacentHTML('beforeend', html);
+                    currentCount += data.data.songs.length;
+                    
+                    if (!data.data.has_more) {
+                        const loadMoreContainer = document.getElementById('explore-load-more');
+                        if (loadMoreContainer) {
+                            loadMoreContainer.style.display = 'none';
+                        }
+                        showNotification('已加载全部歌曲', 'info');
+                    } else {
+                        showNotification(`已加载 ${data.data.songs.length} 首更多歌曲`, 'success');
+                    }
+                } else {
+                    showNotification('没有更多歌曲了', 'info');
+                    const loadMoreContainer = document.getElementById('explore-load-more');
+                    if (loadMoreContainer) {
+                        loadMoreContainer.style.display = 'none';
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('加载更多失败:', error);
+            showNotification('加载失败', 'error');
+        } finally {
+            newBtn.disabled = false;
+            newBtn.innerHTML = '<i class="fas fa-plus"></i> 加载更多';
+        }
+    });
+}
+
+// 绑定全部热门歌曲加载更多
+function bindLoadMoreForAll() {
+    const loadMoreBtn = document.getElementById('load-more-btn');
+    if (!loadMoreBtn) return;
+    
+    loadMoreBtn.replaceWith(loadMoreBtn.cloneNode(true));
+    const newBtn = document.getElementById('load-more-btn');
+    
+    newBtn.addEventListener('click', async () => {
+        console.log('[加载更多] 全部热门歌曲');
+        
+        newBtn.disabled = true;
+        newBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 加载中...';
+        
+        try {
+            // 当前已显示的数量作为 offset
+            const currentCount = document.querySelectorAll('#explore-container .song-card').length;
+            const response = await fetch(`${API_BASE_URL}/songs/hot?tier=all&n=20&offset=${currentCount}`);
+            const data = await response.json();
+            
+            if (data.success && data.data.songs.length > 0) {
+                // 追加显示
+                const container = document.getElementById('explore-container');
+                const html = data.data.songs.map(song => createExploreSongCard(song)).join('');
+                container.insertAdjacentHTML('beforeend', html);
+                
+                // 更新当前热门歌曲数据
+                currentHotSongs = [...currentHotSongs, ...data.data.songs];
+                
+                showNotification(`已加载 ${data.data.songs.length} 首更多歌曲`, 'success');
+            } else {
+                showNotification('没有更多歌曲了', 'info');
+                const loadMoreContainer = document.getElementById('explore-load-more');
+                if (loadMoreContainer) {
+                    loadMoreContainer.style.display = 'none';
+                }
+            }
+        } catch (error) {
+            console.error('加载更多失败:', error);
+            showNotification('加载失败', 'error');
+        } finally {
+            newBtn.disabled = false;
+            newBtn.innerHTML = '<i class="fas fa-plus"></i> 加载更多';
+        }
+    });
+}
+
+// 创建探索页面歌曲卡片
+function createExploreSongCard(song) {
+    // 显示真实的流行度
+    const popularity = song.popularity ? Math.round(song.popularity) : 50;
+    
+    return `
+    <div class="song-card explore-card" data-song-id="${song.song_id}">
+        <div class="song-card-header" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+            <i class="fas fa-compact-disc"></i>
+            <span>发现</span>
+            ${song.has_audio ? 
+                '<span class="audio-badge" title="可播放"><i class="fas fa-volume-up"></i></span>' : 
+                '<span class="no-audio-badge">预览</span>'
+            }
+        </div>
+        <div class="song-card-body">
+            <h3 class="song-title" title="${song.song_name || '未知歌曲'}">${song.song_name || '未知歌曲'}</h3>
+            <p class="song-artist" title="${song.artists || '未知艺术家'}">${song.artists || '未知艺术家'}</p>
+            <div class="song-meta">
+                <span class="genre-tag">${song.genre || '未知流派'}</span>
+                <span class="popularity-badge">${popularity}</span>
+            </div>
+            <div class="song-actions">
+                <button class="action-btn play-song-btn" onclick="event.stopPropagation(); playSong('${song.song_id}')">
+                    <i class="fas fa-play"></i> 播放
+                </button>
+                <button class="action-btn" onclick="event.stopPropagation(); showSongDetail('${song.song_id}')">
+                    <i class="fas fa-info"></i> 详情
+                </button>
+            </div>
+        </div>
+    </div>
+    `;
+}
+
+// 更新流派加载更多功能
+function updateLoadMoreForGenre(genre, currentCount) {
+    const loadMoreBtn = document.getElementById('load-more-btn');
+    if (!loadMoreBtn) return;
+    
+    // 移除旧事件
+    loadMoreBtn.replaceWith(loadMoreBtn.cloneNode(true));
+    const newBtn = document.getElementById('load-more-btn');
+    
+    newBtn.addEventListener('click', async () => {
+        console.log(`[加载更多] 流派: ${genre}, 当前: ${currentCount}`);
+        
+        newBtn.disabled = true;
+        newBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 加载中...';
+        
+        try {
+            const sourceGenres = REVERSE_MAP[genre] || [genre];
+            const genreParam = encodeURIComponent(sourceGenres.join(','));
+            const response = await fetch(
+                `${API_BASE_URL}/songs/by-genre?genre=${genreParam}&limit=20&offset=${currentCount}&fuzzy=1`
+            );
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success && data.data.songs.length > 0) {
+                    appendExploreSongs(data.data.songs);
+                    currentCount += data.data.songs.length;
+                    
+                    if (!data.data.has_more) {
+                        const loadMoreContainer = document.getElementById('explore-load-more');
+                        if (loadMoreContainer) {
+                            loadMoreContainer.style.display = 'none';
+                        }
+                        showNotification('已加载全部歌曲', 'info');
+                    } else {
+                        showNotification(`已加载 ${data.data.songs.length} 首更多歌曲`, 'success');
+                    }
+                } else {
+                    showNotification('没有更多歌曲了', 'info');
+                    const loadMoreContainer = document.getElementById('explore-load-more');
+                    if (loadMoreContainer) {
+                        loadMoreContainer.style.display = 'none';
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('加载更多失败:', error);
+            showNotification('加载失败', 'error');
+        } finally {
+            newBtn.disabled = false;
+            newBtn.innerHTML = '<i class="fas fa-plus"></i> 加载更多';
+        }
+    });
 }
 
 // 备用流派筛选
@@ -2421,21 +2896,74 @@ function displayExploreSongs(songs) {
     `).join('');
 }
 
-function updateStats() {
-    animateCount('user-count', 43355);
-    animateCount('song-count', 16588);
-    animateCount('rec-count', 500);
+async function updateStats() {
+    console.log('[统计] 开始更新统计数据');
+    
+    try {
+        // 【修改】使用正确的端点：/api/v1/songs/stats
+        const response = await fetch(`${API_BASE_URL}/songs/stats`);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            // 使用真实数据
+            const stats = data.data;
+            
+            // 确保数字是有效的
+            const activeUsers = Math.max(1, stats.active_users || 43355);
+            const totalSongs = Math.max(1, stats.total_songs || 16588);
+            const todayRecommends = Math.max(1, stats.today_recommends || 500);
+            
+            animateCount('user-count', activeUsers);
+            animateCount('song-count', totalSongs);
+            animateCount('rec-count', todayRecommends);
+            
+            console.log('[统计] 更新成功:', {
+                activeUsers,
+                totalSongs,
+                todayRecommends,
+                audioSongs: stats.audio_songs
+            });
+        } else {
+            console.warn('[统计] API返回失败，使用默认值');
+            animateCount('user-count', 43355);
+            animateCount('song-count', 16588);
+            animateCount('rec-count', 500);
+        }
+    } catch (error) {
+        console.error('[统计] 获取失败:', error);
+        // 使用默认值
+        animateCount('user-count', 43355);
+        animateCount('song-count', 16588);
+        animateCount('rec-count', 500);
+    }
 }
 
 function animateCount(elementId, target) {
     const element = document.getElementById(elementId);
+    if (!element) {
+        console.error(`[统计] 找不到元素: ${elementId}`);
+        return;
+    }
+    
     const current = parseInt(element.textContent.replace(/,/g, '')) || 0;
+    
+    // 如果目标值和当前值相同，直接设置
+    if (current === target) {
+        element.textContent = target.toLocaleString();
+        return;
+    }
+    
     const increment = Math.ceil((target - current) / 50);
     let count = current;
     
     const timer = setInterval(() => {
         count += increment;
-        if (count >= target) {
+        if ((increment > 0 && count >= target) || (increment < 0 && count <= target)) {
             count = target;
             clearInterval(timer);
         }
@@ -2581,78 +3109,130 @@ function getNotificationIcon(type) {
 const genreOffsets = {};
 
 function initLoadMore() {
+    if (loadMoreInitialized) {
+        console.log('[加载更多] 已初始化，跳过');
+        return;
+    }
+    
     const loadMoreBtn = document.getElementById('load-more-btn');
     if (!loadMoreBtn) {
         console.error('[错误] 找不到加载更多按钮');
         return;
     }
     
-    // 移除旧事件（防止重复绑定）
-    loadMoreBtn.replaceWith(loadMoreBtn.cloneNode(true));
-    const newBtn = document.getElementById('load-more-btn');
+    console.log('[调试] 初始化加载更多按钮');
     
-    newBtn.addEventListener('click', async () => {
-        console.log('[点击] 加载更多');
-        
-        // 获取当前激活的流派
-        const activeBtn = document.querySelector('.genre-tag-btn.active');
-        const currentGenre = activeBtn ? activeBtn.dataset.genre : 'all';
-        
-        // 禁用按钮防止重复点击
-        newBtn.disabled = true;
-        newBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 加载中...';
-        
-        try {
-            if (currentGenre === 'all') {
-                await loadMoreHotSongs();
-            } else {
-                await loadMoreByGenre(currentGenre);
+    // 使用事件委托，避免重复绑定
+    document.addEventListener('click', function(e) {
+        if (e.target.id === 'load-more-btn' || e.target.closest('#load-more-btn')) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            console.log('[点击] 加载更多按钮');
+            
+            const activeBtn = document.querySelector('.genre-tag-btn.active');
+            if (!activeBtn) {
+                console.error('[错误] 没有激活的流派按钮');
+                return;
             }
-        } finally {
-            // 恢复按钮
-            newBtn.disabled = false;
-            newBtn.innerHTML = '<i class="fas fa-plus"></i> 加载更多';
+            
+            const currentGenre = activeBtn.dataset.genre;
+            console.log(`[加载更多] 当前流派: ${currentGenre}`);
+            
+            handleLoadMore(currentGenre);
         }
     });
     
+    loadMoreInitialized = true;
     console.log('[成功] 加载更多按钮事件已绑定');
+}
+
+// 添加统一的加载更多处理函数
+async function handleLoadMore(currentGenre) {
+    const loadMoreBtn = document.getElementById('load-more-btn');
+    if (!loadMoreBtn) return;
+    
+    // 禁用按钮防止重复点击
+    loadMoreBtn.disabled = true;
+    loadMoreBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 加载中...';
+    
+    try {
+        if (currentGenre === 'all') {
+            await loadMoreHotSongs();
+        } else {
+            await loadMoreByGenre(currentGenre);
+        }
+    } catch (error) {
+        console.error('[加载更多] 错误:', error);
+        showNotification('加载失败: ' + error.message, 'error');
+    } finally {
+        // 恢复按钮
+        loadMoreBtn.disabled = false;
+        loadMoreBtn.innerHTML = '<i class="fas fa-plus"></i> 加载更多';
+    }
 }
 
 // 加载更多特定流派歌曲
 async function loadMoreByGenre(genre) {
-    // 获取该流派对应的原始流派列表
-    const sourceGenres = REVERSE_MAP[genre];
-    if (!sourceGenres) return;
+    console.log(`[加载更多] 流派: ${genre}`);
     
-    // 获取当前已显示该流派的歌曲数量作为 offset
-    // 注意：这里需要计算当前视图中该流派的歌曲数
+    // 获取当前已显示的数量
     const container = document.getElementById('explore-container');
-    const currentCards = container.querySelectorAll('.song-card').length;
-    const offset = genreOffsets[genre] || currentCards;
-    const limit = 20;
+    const currentCount = container.querySelectorAll('.song-card').length;
+    
+    // 计算偏移量
+    const offset = currentCount;
+    const limit = 12; // 每次加载12首
     
     try {
-        // 使用 by-genre 接口加载更多
-        const genreParam = encodeURIComponent(sourceGenres.join(','));
+        // 获取该流派对应的原始流派列表
+        const sourceGenres = REVERSE_MAP[genre];
+        if (!sourceGenres) {
+            throw new Error(`未知流派: ${genre}`);
+        }
+        
+        // 使用第一个流派作为查询条件
+        const genreParam = encodeURIComponent(sourceGenres[0]);
+        
+        console.log(`[加载更多] 查询: ${genreParam}, offset: ${offset}, limit: ${limit}`);
+        
         const response = await fetch(
             `${API_BASE_URL}/songs/by-genre?genre=${genreParam}&limit=${limit}&offset=${offset}`
         );
+        
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        
         const data = await response.json();
         
-        if (data.success && data.data.songs.length > 0) {
-            // 追加渲染（不清空已有）
-            appendExploreSongs(data.data.songs);
+        if (data.success && data.data.songs && data.data.songs.length > 0) {
+            // 追加显示
+            const newSongs = data.data.songs;
+            const html = newSongs.map(song => createExploreSongCard(song)).join('');
+            container.insertAdjacentHTML('beforeend', html);
             
-            // 更新偏移量记录
-            genreOffsets[genre] = (genreOffsets[genre] || 0) + data.data.songs.length;
+            console.log(`[加载更多] 成功添加 ${newSongs.length} 首歌曲`);
+            showNotification(`已加载 ${newSongs.length} 首更多歌曲`, 'success');
             
-            showNotification(`${genre}: 已加载 ${data.data.songs.length} 首更多`, 'success');
+            // 检查是否还有更多
+            if (!data.data.has_more) {
+                const loadMoreContainer = document.getElementById('explore-load-more');
+                if (loadMoreContainer) {
+                    loadMoreContainer.style.display = 'none';
+                }
+                showNotification('已加载全部歌曲', 'info');
+            }
         } else {
-            showNotification(`${genre}: 没有更多歌曲了`, 'info');
+            showNotification('没有更多歌曲了', 'info');
+            const loadMoreContainer = document.getElementById('explore-load-more');
+            if (loadMoreContainer) {
+                loadMoreContainer.style.display = 'none';
+            }
         }
     } catch (error) {
-        console.error('加载更多失败:', error);
-        showNotification('加载失败', 'error');
+        console.error('[加载更多] 失败:', error);
+        showNotification('加载失败: ' + error.message, 'error');
     }
 }
 
@@ -3101,8 +3681,8 @@ async function searchFromBackend(query, offset = 0, limit = 20) {
     console.log(`[后端搜索] 查询: "${query}", offset: ${offset}, limit: ${limit}`);
     
     try {
-        // 先检查是否有搜索API
-        const response = await fetch(`${API_BASE_URL}/search?q=${encodeURIComponent(query)}&offset=${offset}&limit=${limit}`);
+        // 【修正】使用正确的API端点
+        const response = await fetch(`${API_BASE_URL}/songs/search?q=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`);
         
         if (!response.ok) {
             console.log(`[后端搜索] API不可用 (${response.status})，使用备用方案`);
@@ -3241,4 +3821,50 @@ function clearSearch() {
     loadExploreContent();
     
     showNotification('已清除搜索', 'info');
+}
+
+async function searchGenreDirectly(genre) {
+    try {
+        // 尝试多种方式搜索流派
+        const attempts = [
+            // 1. 直接搜索流派名
+            `${API_BASE_URL}/songs/search?q=${encodeURIComponent(genre)}&limit=100`,
+            // 2. 使用 by-genre API
+            `${API_BASE_URL}/songs/by-genre?genre=${encodeURIComponent(genre)}&limit=100`,
+            // 3. 搜索热门歌曲中过滤
+            `${API_BASE_URL}/songs/hot?tier=all&n=200`
+        ];
+        
+        for (const url of attempts) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) continue;
+                
+                const data = await response.json();
+                if (data.success && data.data.songs && data.data.songs.length > 0) {
+                    let songs = data.data.songs;
+                    
+                    // 如果不是直接搜索，需要过滤流派
+                    if (!url.includes('search')) {
+                        songs = songs.filter(song => {
+                            const songGenre = (song.genre || '').toLowerCase();
+                            return songGenre.includes(genre.toLowerCase());
+                        });
+                    }
+                    
+                    if (songs.length > 0) {
+                        console.log(`[流派搜索] 通过 ${url} 找到 ${songs.length} 首歌曲`);
+                        return songs;
+                    }
+                }
+            } catch (e) {
+                console.warn(`尝试 ${url} 失败:`, e);
+            }
+        }
+        
+        return [];
+    } catch (error) {
+        console.error('[流派搜索] 错误:', error);
+        return [];
+    }
 }

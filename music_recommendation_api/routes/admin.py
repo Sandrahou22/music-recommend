@@ -315,10 +315,6 @@ def delete_song(song_id):
     return jsonify({"success": True, "message": "删除成功"})
 
 # ==================== 4. 推荐策略配置 ====================
-@bp.route('/config', methods=['GET'])
-@admin_required
-def get_config():
-    return jsonify({"success": True, "data": config})
 
 @bp.route('/config', methods=['PUT'])
 @admin_required
@@ -792,25 +788,6 @@ def get_advanced_stats():
             except Exception as e:
                 logger.error(f"获取年份分布失败: {e}")
                 stats['year_distribution'] = []
-            
-            # 算法总使用情况
-            try:
-                result = conn.execute(text("""
-                    SELECT 
-                        algorithm_type,
-                        COUNT(*) as total_count
-                    FROM recommendations
-                    GROUP BY algorithm_type
-                    ORDER BY total_count DESC
-                """))
-                
-                stats['algorithm_total_usage'] = [
-                    {
-                        "name": get_algorithm_display_name(row.algorithm_type),
-                        "value": row.total_count
-                    }
-                    for row in result
-                ]
             except Exception as e:
                 logger.error(f"获取算法总使用情况失败: {e}")
                 # 提供模拟数据

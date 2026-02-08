@@ -1287,20 +1287,19 @@ function renderSongsTable() {
     const tbody = document.getElementById('songs-table-body');
     
     if (!songsData || songsData.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="6" class="empty-state"><i class="fas fa-inbox"></i><p>暂无数据</p></td></tr>`;
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="6" class="empty-state">
+                    <i class="fas fa-inbox"></i>
+                    <p>暂无歌曲数据</p>
+                </td>
+            </tr>
+        `;
         return;
     }
     
-    tbody.innerHTML = songsData.map((song, index) => {
-        // 调试：打印每个歌曲的流行度相关字段
-        console.log(`Song ${index} (${song.song_id}):`, {
-            final_popularity: song.final_popularity,
-            popularity: song.popularity,
-            finalPopularity: song.finalPopularity,
-            allKeys: Object.keys(song).filter(k => k.toLowerCase().includes('popular'))
-        });
-        
-        // 尝试所有可能的字段名（兼容不同命名规范）
+    tbody.innerHTML = songsData.map((song) => {
+        // 获取流行度值，支持多种字段名
         let popValue = 50; // 默认值
         
         if (song.final_popularity !== undefined && song.final_popularity !== null) {
@@ -1316,13 +1315,13 @@ function renderSongsTable() {
         
         return `
         <tr>
-            <td><strong>${song.song_id}</strong></td>
+            <td><strong>${song.song_id || song.id || 'N/A'}</strong></td>
             <td>
                 <div style="font-weight: 600;">${song.song_name || '未知'}</div>
                 <div style="font-size: 0.85rem; color: var(--text-secondary);">${song.album || '未知专辑'}</div>
             </td>
             <td>${song.artists || '未知'}</td>
-            <td><span class="genre-tag">${song.genre || '其他'}</span></td>
+            <td><span class="genre-tag">${song.genre || song.genre_clean || '其他'}</span></td>
             <td>
                 <div class="popularity-slider-container">
                     <input type="range" class="popularity-slider" 
@@ -1343,7 +1342,8 @@ function renderSongsTable() {
                 </div>
             </td>
         </tr>
-    `}).join('');
+        `;
+    }).join('');
 }
 
 // 修复：排序功能，添加调试日志
@@ -2215,5 +2215,67 @@ async function saveConfig() {
     } catch (err) {
         console.error('保存配置失败:', err);
         showNotification('保存失败: ' + err.message, 'error');
+    }
+}
+
+// ==================== 歌曲管理（新增完整函数） ====================
+async function loadSongsList(page = 1) {
+    currentPage.songs = page;
+    const keyword = document.getElementById('song-search-input').value.trim();
+    const genreFilter = document.getElementById('song-genre-filter').value;
+    const sortField = sortConfig.field;
+    const sortOrder = sortConfig.direction;
+    
+    console.log('Loading songs - Page:', page, 'Keyword:', keyword, 'Genre:', genreFilter, 'Sort:', sortField, sortOrder);
+    
+    try {
+        const params = new URLSearchParams({
+            page: page,
+            per_page: 20,
+            sort_by: sortField,
+            sort_order: sortOrder
+        });
+        
+        if (keyword) params.append('keyword', keyword);
+        if (genreFilter) params.append('genre', genreFilter);
+        
+        const url = `${API_BASE_URL}/admin/songs?${params.toString()}`;
+        console.log('Fetching songs URL:', url);
+        
+        const res = await fetch(url, {
+            headers: {'Authorization': `Bearer ${adminToken}`}
+        });
+        
+        const result = await res.json();
+        console.log('Songs API Response:', result);
+        
+        if (result.success) {
+            songsData = result.data.songs || [];
+            const total = result.data.total || 0;
+            totalPages.songs = Math.ceil(total / 20) || 1;
+            renderSongsTable();
+            renderPagination('songs', totalPages.songs, page);
+        } else {
+            throw new Error(result.message);
+        }
+    } catch (err) {
+        console.error('加载歌曲失败:', err);
+        showNotification('加载歌曲失败: ' + err.message, 'error');
+        
+        // 显示空状态
+        const tbody = document.getElementById('songs-table-body');
+        if (tbody) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="6" class="empty-state">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <p>加载失败: ${err.message}</p>
+                        <button class="btn btn-primary" onclick="loadSongsList(1)" style="margin-top: 1rem;">
+                            重试
+                        </button>
+                    </td>
+                </tr>
+            `;
+        }
     }
 }

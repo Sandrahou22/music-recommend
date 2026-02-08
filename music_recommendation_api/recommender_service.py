@@ -4,7 +4,7 @@ import logging
 import threading  # 【添加这一行】
 import time
 from functools import wraps, lru_cache
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Dict, Optional, Tuple, Any  # 【添加 Any】
 from enum import Enum
 import importlib.util
@@ -656,64 +656,3 @@ class RecommenderService:
 
 # 全局实例（单例）
 recommender_service = RecommenderService()
-
-class RecommenderService:
-    """
-    推荐系统服务包装类 - 生产级优化版本
-    """
-    
-    def __init__(self):
-        self._recommender = None
-        self._engine = None
-        self._status = InitStatus.UNINITIALIZED
-        self._init_lock = threading.RLock()
-        self._init_error: Optional[str] = None
-        self._valid_users: set = set()
-        self._module = None
-        self._circuit_breaker = CircuitBreaker(
-            threshold=Config.CIRCUIT_BREAKER_THRESHOLD,
-            timeout=Config.CIRCUIT_BREAKER_TIMEOUT
-        )
-        
-        # 【修复1】添加缓存相关属性初始化
-        self._recommendation_cache = RecommendationCache()  # 创建缓存实例
-        self._cache_ttl = Config.CACHE_RECOMMENDATIONS_TTL  # 缓存过期时间
-        
-        # 兜底数据（当推荐引擎完全失败时使用）
-        self._fallback_hot_songs: List[Dict] = []
-        self._last_fallback_update = 0
-    
-    def get(self, key: str, ttl_seconds: int = 1800) -> Optional[Any]:
-        """获取缓存，如果过期返回None"""
-        with self._lock:
-            if key not in self._cache:
-                return None
-            
-            timestamp, data = self._cache[key]
-            if time.time() - timestamp > ttl_seconds:
-                # 过期清理
-                del self._cache[key]
-                return None
-            return data
-    
-    def set(self, key: str, data: Any) -> None:
-        """设置缓存"""
-        with self._lock:
-            self._cache[key] = (time.time(), data)
-    
-    def clear(self) -> None:
-        """清空缓存"""
-        with self._lock:
-            self._cache.clear()
-    
-    def get_stats(self) -> dict:
-        """获取缓存统计（用于调试）"""
-        with self._lock:
-            now = time.time()
-            total = len(self._cache)
-            expired = sum(1 for ts, _ in self._cache.values() if now - ts > 1800)
-            return {
-                "total_keys": total,
-                "expired_keys": expired,
-                "active_keys": total - expired
-            }
