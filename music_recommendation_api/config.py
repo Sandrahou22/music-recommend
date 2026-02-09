@@ -16,6 +16,9 @@ class Config:
     SECRET_KEY: str = os.getenv('SECRET_KEY', 'music-recommendation-secret-key-dev-only')
     DEBUG: bool = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
     FLASK_ENV: str = os.getenv('FLASK_ENV', 'development')
+
+    # 管理员配置 - 【新增】
+    ADMIN_TOKEN: str = os.getenv('ADMIN_TOKEN', 'admin-secret-token-2024-change-in-production')
     
     # 路径配置（使用Path处理跨平台）
     BASE_DIR: Path = Path(__file__).parent.resolve()
@@ -73,6 +76,15 @@ class Config:
         'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', 10)),
         'pool_recycle': int(os.getenv('DB_POOL_RECYCLE', 3600))
     }
+
+    # 缓存配置 - 【新增】
+    CACHE_TYPE: str = os.getenv('CACHE_TYPE', 'SimpleCache')
+    CACHE_DEFAULT_TIMEOUT: int = int(os.getenv('CACHE_DEFAULT_TIMEOUT', 300))
+    
+    # 文件上传配置 - 【新增】
+    MAX_CONTENT_LENGTH: int = 16 * 1024 * 1024  # 16MB
+    UPLOAD_FOLDER: Path = BASE_DIR / 'uploads'
+    ALLOWED_EXTENSIONS: set = {'mp3', 'wav', 'ogg', 'flac', 'm4a'}
     
     @classmethod
     def get_db_connection_string(cls) -> str:
@@ -116,6 +128,8 @@ class DevelopmentConfig(Config):
     # 开发环境使用简单缓存
     CACHE_TYPE = "SimpleCache"
     CACHE_DEFAULT_TIMEOUT = 300
+    # 开发环境管理员令牌（用于测试）
+    ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', 'dev-admin-token-test-only')
 
 class ProductionConfig(Config):
     """生产环境配置"""
@@ -123,12 +137,17 @@ class ProductionConfig(Config):
     # 生产环境推荐Redis（如未安装则使用SimpleCache）
     CACHE_TYPE = os.getenv('CACHE_TYPE', 'SimpleCache')
     CACHE_REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    # 生产环境必须设置强密码
+    ADMIN_TOKEN = os.getenv('ADMIN_TOKEN')
+    if not ADMIN_TOKEN:
+        raise ValueError("生产环境必须设置ADMIN_TOKEN环境变量")
 
 class TestingConfig(Config):
     """测试环境配置"""
     TESTING = True
     DEBUG = True
     DB_CONFIG = {**Config.DB_CONFIG, 'database': 'MusicRecommendationDB_Test'}
+    ADMIN_TOKEN = 'test-admin-token'
 
 # 配置映射（app.py需要）
 config_map = {

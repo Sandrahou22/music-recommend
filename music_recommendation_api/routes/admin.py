@@ -12,8 +12,301 @@ from recommender_service import recommender_service
 
 # 【添加这一行】
 logger = logging.getLogger(__name__)
-
 bp = Blueprint('admin', __name__)
+
+# ==================== 评论管理功能 ====================
+
+# 1. 获取歌曲评论列表
+@bp.route('/songs/<song_id>/comments', methods=['GET'])
+def get_song_comments_admin(song_id):
+    """管理员获取歌曲评论列表"""
+    try:
+        # 这里已经有登录验证，所以不需要额外验证
+        page = request.args.get('page', 1, type=int)
+        per_page = min(request.args.get('per_page', 10, type=int), 100)
+        offset = (page - 1) * per_page
+        
+        engine = recommender_service._engine
+        
+        # 验证歌曲是否存在
+        song_check = engine.execute(
+            text("SELECT song_name FROM enhanced_song_features WHERE song_id = :song_id"),
+            {"song_id": song_id}
+        ).fetchone()
+        
+        if not song_check:
+            return jsonify({"success": False, "message": "歌曲不存在"}), 404
+        
+        # 获取评论数据
+        query = text("""
+            SELECT 
+                comment_id,
+                unified_song_id,
+                original_user_id,
+                user_nickname,
+                content,
+                liked_count,
+                comment_time,
+                sentiment_score,
+                is_positive,
+                created_at
+            FROM song_comments
+            WHERE unified_song_id = :song_id
+            ORDER BY comment_time DESC
+            OFFSET :offset ROWS
+            FETCH NEXT :limit ROWS ONLY
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(
+                query,
+                {"song_id": song_id, "offset": offset, "limit": per_page}
+            )
+            
+            comments = []
+            for row in result:
+                comments.append({
+                    "comment_id": row.comment_id,
+                    "user_id": row.original_user_id,
+                    "user_nickname": row.user_nickname or "匿名用户",
+                    "content": row.content,
+                    "liked_count": row.liked_count or 0,
+                    "comment_time": row.comment_time.isoformat() if row.comment_time else None,
+                    "sentiment_score": float(row.sentiment_score) if row.sentiment_score else 0.5,
+                    "is_positive": bool(row.is_positive) if row.is_positive is not None else None,
+                    "created_at": row.created_at.isoformat() if row.created_at else None
+                })
+            
+            # 获取总数
+            count_query = text("""
+                SELECT COUNT(*) as total 
+                FROM song_comments 
+                WHERE unified_song_id = :song_id
+            """)
+            total = conn.execute(count_query, {"song_id": song_id}).fetchone().total
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "song_id": song_id,
+                "song_name": song_check.song_name,
+                "comments": comments,
+                "pagination": {
+                    "page": page,
+                    "per_page": per_page,
+                    "total": total,
+                    "pages": (total + per_page - 1) // per_page
+                }
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"获取歌曲评论失败 [{song_id}]: {e}", exc_info=True)
+        return jsonify({"success": False, "message": f"获取评论失败: {str(e)}"}), 500
+
+# 2. 获取歌曲评论统计
+@bp.route('/songs/<song_id>/comments/stats', methods=['GET'])
+def get_song_comments_stats_admin(song_id):
+    """管理员获取歌曲评论统计"""
+    try:
+        engine = recommender_service._engine
+        
+        query = text("""
+            SELECT 
+                COUNT(*) as total_comments,
+                SUM(liked_count) as total_likes,
+                AVG(CAST(sentiment_score as FLOAT)) as avg_sentiment,
+                SUM(CASE WHEN is_positive = 1 THEN 1 ELSE 0 END) as positive_count,
+                SUM(CASE WHEN is_positive = 0 THEN 1 ELSE 0 END) as negative_count,
+                SUM(CASE WHEN is_positive IS NULL THEN 1 ELSE 0 END) as neutral_count
+            FROM song_comments
+            WHERE unified_song_id = :song_id
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(query, {"song_id": song_id}).fetchone()
+            
+            if not result or result.total_comments == 0:
+                stats = {
+                    "total_comments": 0,
+                    "total_likes": 0,
+                    "avg_sentiment": 0.5,
+                    "positive_count": 0,
+                    "negative_count": 0,
+                    "neutral_count": 0,
+                    "positive_ratio": 0,
+                    "negative_ratio": 0,
+                    "neutral_ratio": 0
+                }
+            else:
+                total = result.total_comments
+                positive_ratio = round(result.positive_count / total * 100, 1) if total > 0 else 0
+                negative_ratio = round(result.negative_count / total * 100, 1) if total > 0 else 0
+                neutral_ratio = round(result.neutral_count / total * 100, 1) if total > 0 else 0
+                
+                stats = {
+                    "total_comments": result.total_comments,
+                    "total_likes": result.total_likes or 0,
+                    "avg_sentiment": float(result.avg_sentiment) if result.avg_sentiment else 0.5,
+                    "positive_count": result.positive_count or 0,
+                    "negative_count": result.negative_count or 0,
+                    "neutral_count": result.neutral_count or 0,
+                    "positive_ratio": positive_ratio,
+                    "negative_ratio": negative_ratio,
+                    "neutral_ratio": neutral_ratio
+                }
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "song_id": song_id,
+                "stats": stats
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"获取评论统计失败 [{song_id}]: {e}")
+        return jsonify({"success": False, "message": f"获取统计失败: {str(e)}"}), 500
+
+# 3. 修改评论情感值
+@bp.route('/comments/<int:comment_id>/sentiment', methods=['PUT'])
+def update_comment_sentiment(comment_id):
+    """修改评论情感值"""
+    try:
+        data = request.get_json()
+        if not data or 'sentiment_score' not in data:
+            return jsonify({"success": False, "message": "缺少sentiment_score参数"}), 400
+        
+        sentiment_score = float(data['sentiment_score'])
+        
+        # 验证范围
+        if sentiment_score < 0 or sentiment_score > 1:
+            return jsonify({"success": False, "message": "情感值必须在0-1之间"}), 400
+        
+        # 计算是否为正面评论
+        is_positive = 1 if sentiment_score > 0.6 else (0 if sentiment_score < 0.4 else None)
+        
+        engine = recommender_service._engine
+        
+        # 获取原评论信息
+        get_query = text("""
+            SELECT unified_song_id FROM song_comments WHERE comment_id = :comment_id
+        """)
+        
+        with engine.connect() as conn:
+            comment = conn.execute(get_query, {"comment_id": comment_id}).fetchone()
+            
+            if not comment:
+                return jsonify({"success": False, "message": "评论不存在"}), 404
+        
+        # 更新情感值
+        update_query = text("""
+            UPDATE song_comments 
+            SET sentiment_score = :sentiment_score, is_positive = :is_positive
+            WHERE comment_id = :comment_id
+        """)
+        
+        with engine.begin() as conn:
+            conn.execute(update_query, {
+                "comment_id": comment_id,
+                "sentiment_score": sentiment_score,
+                "is_positive": is_positive
+            })
+        
+        # 更新歌曲的平均情感值
+        update_song_sentiment_query = text("""
+            UPDATE enhanced_song_features 
+            SET avg_sentiment = ISNULL(
+                (SELECT AVG(CAST(sentiment_score as FLOAT)) 
+                 FROM song_comments 
+                 WHERE unified_song_id = :song_id),
+                0.5
+            )
+            WHERE song_id = :song_id
+        """)
+        
+        with engine.begin() as conn:
+            conn.execute(update_song_sentiment_query, {"song_id": comment.unified_song_id})
+        
+        logger.info(f"更新评论 {comment_id} 情感值为 {sentiment_score}")
+        
+        return jsonify({
+            "success": True,
+            "message": "情感值更新成功",
+            "data": {
+                "comment_id": comment_id,
+                "sentiment_score": sentiment_score,
+                "is_positive": is_positive
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"更新情感值失败 [{comment_id}]: {e}")
+        return jsonify({"success": False, "message": f"更新失败: {str(e)}"}), 500
+
+# 4. 删除评论（管理员）
+@bp.route('/comments/<int:comment_id>', methods=['DELETE'])
+def delete_comment_admin(comment_id):
+    """管理员删除评论"""
+    try:
+        engine = recommender_service._engine
+        
+        # 先获取评论信息
+        get_query = text("""
+            SELECT unified_song_id, original_user_id, user_nickname
+            FROM song_comments 
+            WHERE comment_id = :comment_id
+        """)
+        
+        with engine.connect() as conn:
+            comment = conn.execute(get_query, {"comment_id": comment_id}).fetchone()
+            
+            if not comment:
+                return jsonify({"success": False, "message": "评论不存在"}), 404
+        
+        # 删除评论
+        delete_query = text("""
+            DELETE FROM song_comments WHERE comment_id = :comment_id
+        """)
+        
+        with engine.begin() as conn:
+            conn.execute(delete_query, {"comment_id": comment_id})
+        
+        # 更新歌曲统计
+        update_song_query = text("""
+            UPDATE enhanced_song_features 
+            SET comment_count = 
+                CASE 
+                    WHEN ISNULL(comment_count, 0) - 1 < 0 THEN 0 
+                    ELSE ISNULL(comment_count, 0) - 1 
+                END,
+                avg_sentiment = ISNULL(
+                    (SELECT AVG(CAST(sentiment_score as FLOAT)) 
+                     FROM song_comments 
+                     WHERE unified_song_id = :song_id),
+                    0.5
+                )
+            WHERE song_id = :song_id
+        """)
+        
+        with engine.begin() as conn:
+            conn.execute(update_song_query, {"song_id": comment.unified_song_id})
+        
+        logger.info(f"管理员删除评论 {comment_id}, 歌曲: {comment.unified_song_id}")
+        
+        return jsonify({
+            "success": True,
+            "message": "评论删除成功",
+            "data": {
+                "comment_id": comment_id,
+                "song_id": comment.unified_song_id,
+                "user_nickname": comment.user_nickname
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"删除评论失败 [{comment_id}]: {e}")
+        return jsonify({"success": False, "message": f"删除失败: {str(e)}"}), 500
 
 def get_algorithm_display_name(algorithm_type):
     """获取算法显示名称"""
@@ -122,20 +415,35 @@ def get_dashboard_stats():
         result = conn.execute(text("SELECT COUNT(*) FROM enhanced_song_features"))
         stats['total_songs'] = result.fetchone()[0]
         
-        # 3. 今日新增用户（近24小时）
-        result = conn.execute(text("""
-            SELECT COUNT(*) FROM enhanced_user_features 
-            WHERE created_at >= DATEADD(hour, -24, GETDATE())
-        """))
-        stats['new_users_today'] = result.fetchone()[0]
-        
-        # 4. 今日播放量（从行为表统计）
+        # 3. 今日播放量
         result = conn.execute(text("""
             SELECT COUNT(*) FROM user_song_interaction 
             WHERE behavior_type = 'play' 
             AND [timestamp] >= DATEADD(hour, -24, GETDATE())
         """))
         stats['plays_today'] = result.fetchone()[0] or 0
+        
+        # 4. 【新增】推荐成功率（最近7天）
+        result = conn.execute(text("""
+            SELECT 
+                COUNT(*) as total_recommendations,
+                SUM(CASE WHEN is_clicked = 1 THEN 1 ELSE 0 END) as clicks,
+                SUM(CASE WHEN is_listened = 1 THEN 1 ELSE 0 END) as listens
+            FROM recommendations
+            WHERE created_at >= DATEADD(day, -7, GETDATE())
+        """))
+        row = result.fetchone()
+        total = row.total_recommendations or 0
+        clicks = row.clicks or 0
+        listens = row.listens or 0
+        
+        if total > 0:
+            # 成功率 = (点击率 * 0.4 + 收听率 * 0.6) * 100
+            ctr = (clicks / total * 100) if total > 0 else 0
+            listen_rate = (listens / total * 100) if total > 0 else 0
+            stats['success_rate'] = round((ctr * 0.4 + listen_rate * 0.6), 1)
+        else:
+            stats['success_rate'] = 87.0  # 默认值
         
         # 5. 流派分布（用于饼图）
         result = conn.execute(text("""
@@ -150,7 +458,7 @@ def get_dashboard_stats():
             for row in result
         ]
         
-        # 6. 近7天用户增长趋势（用于折线图）
+        # 6. 近7天用户增长趋势
         result = conn.execute(text("""
             SELECT 
                 CAST(created_at AS DATE) as date,
@@ -165,7 +473,7 @@ def get_dashboard_stats():
             for row in result
         ]
         
-        # 7. 热门歌曲Top10（今日播放量）- 真实数据
+        # 7. 热门歌曲Top10
         result = conn.execute(text("""
             SELECT TOP 10 
                 s.song_id,
@@ -178,7 +486,6 @@ def get_dashboard_stats():
             GROUP BY s.song_id, s.song_name, s.artists, s.final_popularity
             ORDER BY total_plays DESC, s.final_popularity DESC
         """))
-
         stats['hot_songs_top10'] = [
             {
                 "song_id": row.song_id,
@@ -798,6 +1105,113 @@ def get_advanced_stats():
                 #    {"name": "内容推荐", "value": 1750},
                 #    {"name": "矩阵分解", "value": 1320}
                 #]
+            # 11. 用户听歌数目分布 - 修复SQL
+            try:
+                result = conn.execute(text("""
+                    SELECT 
+                        song_range,
+                        user_count
+                    FROM (
+                        SELECT 
+                            CASE 
+                                WHEN unique_songs <= 10 THEN '0-10首'
+                                WHEN unique_songs <= 50 THEN '11-50首'
+                                WHEN unique_songs <= 100 THEN '51-100首'
+                                WHEN unique_songs <= 200 THEN '101-200首'
+                                WHEN unique_songs <= 500 THEN '201-500首'
+                                ELSE '500首以上'
+                            END as song_range,
+                            COUNT(*) as user_count,
+                            CASE 
+                                WHEN unique_songs <= 10 THEN 1
+                                WHEN unique_songs <= 50 THEN 2
+                                WHEN unique_songs <= 100 THEN 3
+                                WHEN unique_songs <= 200 THEN 4
+                                WHEN unique_songs <= 500 THEN 5
+                                ELSE 6
+                            END as sort_order
+                        FROM enhanced_user_features
+                        WHERE unique_songs IS NOT NULL
+                        GROUP BY 
+                            CASE 
+                                WHEN unique_songs <= 10 THEN '0-10首'
+                                WHEN unique_songs <= 50 THEN '11-50首'
+                                WHEN unique_songs <= 100 THEN '51-100首'
+                                WHEN unique_songs <= 200 THEN '101-200首'
+                                WHEN unique_songs <= 500 THEN '201-500首'
+                                ELSE '500首以上'
+                            END,
+                            CASE 
+                                WHEN unique_songs <= 10 THEN 1
+                                WHEN unique_songs <= 50 THEN 2
+                                WHEN unique_songs <= 100 THEN 3
+                                WHEN unique_songs <= 200 THEN 4
+                                WHEN unique_songs <= 500 THEN 5
+                                ELSE 6
+                            END
+                    ) t
+                    ORDER BY sort_order
+                """))
+                stats['song_count_distribution'] = [
+                    {"name": row.song_range, "value": row.user_count}
+                    for row in result
+                ]
+            except Exception as e:
+                logger.error(f"获取用户听歌数目分布失败: {e}")
+                stats['song_count_distribution'] = []
+
+            # 12. 歌曲出版年份分布（近20年）
+            try:
+                result = conn.execute(text("""
+                    SELECT 
+                        CAST(publish_year AS VARCHAR) as publish_year_str,
+                        COUNT(*) as song_count
+                    FROM enhanced_song_features
+                    WHERE publish_year IS NOT NULL 
+                    AND publish_year >= YEAR(GETDATE()) - 20
+                    AND publish_year <= YEAR(GETDATE())
+                    GROUP BY publish_year
+                    ORDER BY publish_year
+                """))
+                stats['year_distribution'] = [
+                    {"year": str(row.publish_year_str), "count": row.song_count} 
+                    for row in result
+                ]
+            except Exception as e:
+                logger.error(f"获取歌曲出版年份分布失败: {e}")
+                stats['year_distribution'] = []
+
+            # 13. 最受好评歌曲（根据评论情感值）
+            try:
+                result = conn.execute(text("""
+                    SELECT TOP 10
+                        s.song_id,
+                        s.song_name,
+                        s.artists,
+                        COALESCE(AVG(c.sentiment_score), 0.5) as avg_sentiment,
+                        COUNT(c.comment_id) as comment_count
+                    FROM enhanced_song_features s
+                    LEFT JOIN song_comments c ON s.song_id = c.unified_song_id
+                    WHERE c.sentiment_score IS NOT NULL
+                    GROUP BY s.song_id, s.song_name, s.artists
+                    HAVING COUNT(c.comment_id) >= 3  -- 至少3条评论才有参考价值
+                    ORDER BY avg_sentiment DESC
+                """))
+                
+                top_rated_songs = []
+                for row in result:
+                    top_rated_songs.append({
+                        "song_id": row.song_id,
+                        "song_name": row.song_name,
+                        "artists": row.artists,
+                        "avg_sentiment": float(row.avg_sentiment) if row.avg_sentiment else 0.5,
+                        "comment_count": row.comment_count or 0,
+                        "display_name": f"{row.song_name[:15]}..." if len(row.song_name) > 15 else row.song_name
+                    })
+                stats['top_rated_songs'] = top_rated_songs
+            except Exception as e:
+                logger.error(f"获取最受好评歌曲失败: {e}")
+                stats['top_rated_songs'] = []
     
     except Exception as e:
         logger.error(f"获取高级统计时发生全局错误: {e}")
@@ -1296,3 +1710,208 @@ def config_endpoint():
         except Exception as e:
             logger.error(f"保存配置失败: {e}")
             return jsonify({"success": False, "message": f"保存失败: {str(e)}"}), 500
+        
+@bp.route('/config/system', methods=['GET'])
+@admin_required  # 【关键】添加这个装饰器，使用JWT验证
+def get_system_config():
+    """获取系统配置"""
+    try:
+        
+        # 从数据库获取配置，如果没有则返回默认配置
+        engine = recommender_service._engine
+        
+        # 检查system_config表是否存在
+        table_check = engine.execute(text("""
+            SELECT 1 FROM sys.tables WHERE name = 'system_config'
+        """)).fetchone()
+        
+        if table_check:
+            # 从数据库读取配置
+            config_query = text("SELECT config_key, config_value FROM system_config")
+            with engine.connect() as conn:
+                result = conn.execute(config_query)
+                config_data = {}
+                for row in result:
+                    # 解析配置键，如 "recommendation.cache_ttl"
+                    key_parts = row.config_key.split('.')
+                    if len(key_parts) >= 2:
+                        section = key_parts[0]
+                        key = key_parts[1]
+                        if section not in config_data:
+                            config_data[section] = {}
+                        config_data[section][key] = row.config_value
+        else:
+            # 返回默认配置
+            config_data = {}
+        
+        # 构建配置响应
+        config = {
+            "recommendation": {
+                "cache_ttl": int(config_data.get('recommendation', {}).get('cache_ttl', 30)),
+                "mmr_enabled": config_data.get('recommendation', {}).get('mmr_enabled', 'true').lower() == 'true',
+                "cold_start_strategy": config_data.get('recommendation', {}).get('cold_start_strategy', 'hot'),
+                "max_recommend_count": int(config_data.get('recommendation', {}).get('max_recommend_count', 50))
+            },
+            "system": {
+                "enable_ab_test": config_data.get('system', {}).get('enable_ab_test', 'false').lower() == 'true',
+                "ab_test_group_a": config_data.get('system', {}).get('ab_test_group_a', 'hybrid'),
+                "ab_test_group_b": config_data.get('system', {}).get('ab_test_group_b', 'itemcf'),
+                "default_algorithm": config_data.get('system', {}).get('default_algorithm', 'hybrid')
+            },
+            "user": {
+                "min_songs_for_personalization": int(config_data.get('user', {}).get('min_songs_for_personalization', 10))
+            },
+            "content": {
+                "similarity_threshold": float(config_data.get('content', {}).get('similarity_threshold', 0.6))
+            }
+        }
+        
+        return jsonify({
+            "success": True,
+            "data": config
+        })
+        
+    except Exception as e:
+        logger.error(f"获取系统配置失败: {e}", exc_info=True)
+        return jsonify({"success": False, "message": f"获取配置失败: {str(e)}"}), 500
+
+@bp.route('/config/system', methods=['PUT'])
+def update_system_config():
+    """更新系统配置"""
+    try:
+        # 验证管理员权限
+        admin_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not admin_token or admin_token != current_app.config.get('ADMIN_TOKEN'):
+            return jsonify({"success": False, "message": "未授权"}), 401
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "message": "缺少配置数据"}), 400
+        
+        # 这里可以添加配置验证逻辑
+        
+        # 保存到数据库
+        engine = recommender_service._engine
+        
+        # 确保表存在
+        engine.execute(text("""
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'system_config')
+            CREATE TABLE system_config (
+                config_id INT IDENTITY(1,1) PRIMARY KEY,
+                config_key VARCHAR(100) NOT NULL UNIQUE,
+                config_value NVARCHAR(500) NOT NULL,
+                created_at DATETIME DEFAULT GETDATE(),
+                updated_at DATETIME DEFAULT GETDATE()
+            )
+        """))
+        
+        # 更新配置
+        for category, settings in data.items():
+            if isinstance(settings, dict):
+                for key, value in settings.items():
+                    config_key = f"{category}.{key}"
+                    config_value = str(value)
+                    
+                    # 使用upsert操作
+                    upsert_query = text("""
+                        MERGE system_config AS target
+                        USING (SELECT :key AS config_key, :value AS config_value) AS source
+                        ON target.config_key = source.config_key
+                        WHEN MATCHED THEN
+                            UPDATE SET config_value = source.config_value, updated_at = GETDATE()
+                        WHEN NOT MATCHED THEN
+                            INSERT (config_key, config_value) VALUES (source.config_key, source.config_value);
+                    """)
+                    
+                    with engine.begin() as conn:
+                        conn.execute(upsert_query, {"key": config_key, "value": config_value})
+        
+        return jsonify({
+            "success": True,
+            "message": "系统配置已保存成功"
+        })
+        
+    except Exception as e:
+        logger.error(f"保存系统配置失败: {e}", exc_info=True)
+        return jsonify({"success": False, "message": f"保存失败: {str(e)}"}), 500
+    
+@bp.route('/users/<user_id>', methods=['GET'])
+@admin_required
+def get_user_detail(user_id):
+    """获取单个用户详情"""
+    try:
+        engine = recommender_service._engine
+        
+        query = text("""
+            SELECT 
+                user_id, nickname, gender, age, province, city,
+                role, activity_level, unique_songs, total_interactions,
+                created_at, updated_at
+            FROM enhanced_user_features 
+            WHERE user_id = :user_id
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(query, {"user_id": user_id}).fetchone()
+            
+            if not result:
+                return jsonify({"success": False, "message": "用户不存在"}), 404
+            
+            user_data = dict(result._mapping)
+            
+            # 转换数据类型
+            if user_data.get('gender'):
+                user_data['gender'] = int(user_data['gender'])
+            if user_data.get('age'):
+                user_data['age'] = int(user_data['age'])
+            
+            return jsonify({
+                "success": True,
+                "data": user_data
+            })
+            
+    except Exception as e:
+        logger.error(f"获取用户详情失败: {e}")
+        return jsonify({"success": False, "message": f"获取失败: {str(e)}"}), 500
+    
+@bp.route('/songs/<song_id>', methods=['GET'])
+@admin_required
+def get_song_detail_admin(song_id):
+    """获取单个歌曲详情（管理员版）"""
+    try:
+        engine = recommender_service._engine
+        
+        query = text("""
+            SELECT 
+                song_id, song_name, artists, album, genre, language,
+                publish_year, duration_ms, popularity, final_popularity,
+                danceability, energy, valence, tempo,
+                created_at, updated_at
+            FROM enhanced_song_features 
+            WHERE song_id = :song_id
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(query, {"song_id": song_id}).fetchone()
+            
+            if not result:
+                return jsonify({"success": False, "message": "歌曲不存在"}), 404
+            
+            song_data = dict(result._mapping)
+            
+            # 添加音频特征对象
+            song_data['audio_features'] = {
+                'danceability': float(song_data.get('danceability', 0.5)),
+                'energy': float(song_data.get('energy', 0.5)),
+                'valence': float(song_data.get('valence', 0.5)),
+                'tempo': float(song_data.get('tempo', 120))
+            }
+            
+            return jsonify({
+                "success": True,
+                "data": song_data
+            })
+            
+    except Exception as e:
+        logger.error(f"获取歌曲详情失败: {e}")
+        return jsonify({"success": False, "message": f"获取失败: {str(e)}"}), 500

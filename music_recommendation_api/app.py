@@ -180,6 +180,8 @@ def create_app(config_name: str = None):
     # 后台初始化
     init_recommender_in_background(app)
     
+    app.config['ADMIN_TOKEN'] = os.environ.get('ADMIN_TOKEN', 'admin-secret-token-2024')
+
     return app
 
 def register_error_handlers(app: Flask):

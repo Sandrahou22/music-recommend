@@ -820,3 +820,402 @@ def recalculate_all_comments_sentiment():
     except Exception as e:
         logger.error(f"重新计算情感分数失败: {e}", exc_info=True)
         return error(message=f"重新计算失败: {str(e)}", code=500)
+    
+# routes/admin.py 中添加评论管理功能
+
+# 1. 获取歌曲的评论列表
+@bp.route('/songs/<song_id>/comments', methods=['GET'])
+def get_song_comments_admin(song_id):
+    """管理员获取歌曲评论列表"""
+    try:
+        # 验证管理员权限
+        admin_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not admin_token or admin_token != current_app.config.get('ADMIN_TOKEN'):
+            return jsonify({"success": False, "message": "未授权"}), 401
+        
+        page = request.args.get('page', 1, type=int)
+        per_page = min(request.args.get('per_page', 20, type=int), 100)
+        offset = (page - 1) * per_page
+        
+        engine = recommender_service._engine
+        
+        # 验证歌曲是否存在
+        song_check = engine.execute(
+            text("SELECT song_name FROM enhanced_song_features WHERE song_id = :song_id"),
+            {"song_id": song_id}
+        ).fetchone()
+        
+        if not song_check:
+            return jsonify({"success": False, "message": "歌曲不存在"}), 404
+        
+        # 获取评论数据
+        query = text("""
+            SELECT 
+                comment_id,
+                unified_song_id,
+                original_user_id,
+                user_nickname,
+                content,
+                liked_count,
+                comment_time,
+                sentiment_score,
+                is_positive,
+                created_at
+            FROM song_comments
+            WHERE unified_song_id = :song_id
+            ORDER BY comment_time DESC
+            OFFSET :offset ROWS
+            FETCH NEXT :limit ROWS ONLY
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(
+                query,
+                {"song_id": song_id, "offset": offset, "limit": per_page}
+            )
+            
+            comments = []
+            for row in result:
+                comments.append({
+                    "comment_id": row.comment_id,
+                    "user_id": row.original_user_id,
+                    "user_nickname": row.user_nickname or "匿名用户",
+                    "content": row.content,
+                    "liked_count": row.liked_count or 0,
+                    "comment_time": row.comment_time.isoformat() if row.comment_time else None,
+                    "sentiment_score": float(row.sentiment_score) if row.sentiment_score else 0.5,
+                    "is_positive": bool(row.is_positive) if row.is_positive is not None else None,
+                    "created_at": row.created_at.isoformat() if row.created_at else None
+                })
+            
+            # 获取总数
+            count_query = text("""
+                SELECT COUNT(*) as total 
+                FROM song_comments 
+                WHERE unified_song_id = :song_id
+            """)
+            total = conn.execute(count_query, {"song_id": song_id}).fetchone().total
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "song_id": song_id,
+                "song_name": song_check.song_name,
+                "comments": comments,
+                "pagination": {
+                    "page": page,
+                    "per_page": per_page,
+                    "total": total,
+                    "pages": (total + per_page - 1) // per_page
+                }
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"获取歌曲评论失败 [{song_id}]: {e}", exc_info=True)
+        return jsonify({"success": False, "message": f"获取评论失败: {str(e)}"}), 500
+
+# 2. 删除评论（管理员）
+@bp.route('/comments/<int:comment_id>', methods=['DELETE'])
+def delete_comment_admin(comment_id):
+    """管理员删除评论"""
+    try:
+        # 验证管理员权限
+        admin_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not admin_token or admin_token != current_app.config.get('ADMIN_TOKEN'):
+            return jsonify({"success": False, "message": "未授权"}), 401
+        
+        engine = recommender_service._engine
+        
+        # 先获取评论信息
+        get_query = text("""
+            SELECT unified_song_id, original_user_id, user_nickname
+            FROM song_comments 
+            WHERE comment_id = :comment_id
+        """)
+        
+        with engine.connect() as conn:
+            comment = conn.execute(get_query, {"comment_id": comment_id}).fetchone()
+            
+            if not comment:
+                return jsonify({"success": False, "message": "评论不存在"}), 404
+        
+        # 删除评论
+        delete_query = text("""
+            DELETE FROM song_comments WHERE comment_id = :comment_id
+        """)
+        
+        with engine.begin() as conn:
+            conn.execute(delete_query, {"comment_id": comment_id})
+        
+        # 更新歌曲统计
+        update_song_query = text("""
+            UPDATE enhanced_song_features 
+            SET comment_count = 
+                CASE 
+                    WHEN ISNULL(comment_count, 0) - 1 < 0 THEN 0 
+                    ELSE ISNULL(comment_count, 0) - 1 
+                END,
+                avg_sentiment = ISNULL(
+                    (SELECT AVG(CAST(sentiment_score as FLOAT)) 
+                     FROM song_comments 
+                     WHERE unified_song_id = :song_id),
+                    0.5
+                )
+            WHERE song_id = :song_id
+        """)
+        
+        with engine.begin() as conn:
+            conn.execute(update_song_query, {"song_id": comment.unified_song_id})
+        
+        logger.info(f"管理员删除评论 {comment_id}, 歌曲: {comment.unified_song_id}")
+        
+        return jsonify({
+            "success": True,
+            "message": "评论删除成功",
+            "data": {
+                "comment_id": comment_id,
+                "song_id": comment.unified_song_id,
+                "user_nickname": comment.user_nickname
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"删除评论失败 [{comment_id}]: {e}", exc_info=True)
+        return jsonify({"success": False, "message": f"删除失败: {str(e)}"}), 500
+
+# 3. 修改评论情感值
+@bp.route('/comments/<int:comment_id>/sentiment', methods=['PUT'])
+def update_comment_sentiment(comment_id):
+    """修改评论情感值"""
+    try:
+        # 验证管理员权限
+        admin_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not admin_token or admin_token != current_app.config.get('ADMIN_TOKEN'):
+            return jsonify({"success": False, "message": "未授权"}), 401
+        
+        data = request.get_json()
+        if not data or 'sentiment_score' not in data:
+            return jsonify({"success": False, "message": "缺少sentiment_score参数"}), 400
+        
+        sentiment_score = float(data['sentiment_score'])
+        
+        # 验证范围
+        if sentiment_score < 0 or sentiment_score > 1:
+            return jsonify({"success": False, "message": "情感值必须在0-1之间"}), 400
+        
+        # 计算是否为正面评论
+        is_positive = 1 if sentiment_score > 0.6 else (0 if sentiment_score < 0.4 else None)
+        
+        engine = recommender_service._engine
+        
+        # 获取原评论信息
+        get_query = text("""
+            SELECT unified_song_id FROM song_comments WHERE comment_id = :comment_id
+        """)
+        
+        with engine.connect() as conn:
+            comment = conn.execute(get_query, {"comment_id": comment_id}).fetchone()
+            
+            if not comment:
+                return jsonify({"success": False, "message": "评论不存在"}), 404
+        
+        # 更新情感值
+        update_query = text("""
+            UPDATE song_comments 
+            SET sentiment_score = :sentiment_score, is_positive = :is_positive
+            WHERE comment_id = :comment_id
+        """)
+        
+        with engine.begin() as conn:
+            conn.execute(update_query, {
+                "comment_id": comment_id,
+                "sentiment_score": sentiment_score,
+                "is_positive": is_positive
+            })
+        
+        # 更新歌曲的平均情感值
+        update_song_sentiment_query = text("""
+            UPDATE enhanced_song_features 
+            SET avg_sentiment = ISNULL(
+                (SELECT AVG(CAST(sentiment_score as FLOAT)) 
+                 FROM song_comments 
+                 WHERE unified_song_id = :song_id),
+                0.5
+            )
+            WHERE song_id = :song_id
+        """)
+        
+        with engine.begin() as conn:
+            conn.execute(update_song_sentiment_query, {"song_id": comment.unified_song_id})
+        
+        logger.info(f"更新评论 {comment_id} 情感值为 {sentiment_score}")
+        
+        return jsonify({
+            "success": True,
+            "message": "情感值更新成功",
+            "data": {
+                "comment_id": comment_id,
+                "sentiment_score": sentiment_score,
+                "is_positive": is_positive
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"更新情感值失败 [{comment_id}]: {e}", exc_info=True)
+        return jsonify({"success": False, "message": f"更新失败: {str(e)}"}), 500
+
+# 4. 批量重新计算歌曲评论情感值
+@bp.route('/songs/<song_id>/comments/recalculate-sentiment', methods=['POST'])
+def recalculate_song_comments_sentiment(song_id):
+    """重新计算歌曲所有评论的情感值"""
+    try:
+        # 验证管理员权限
+        admin_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not admin_token or admin_token != current_app.config.get('ADMIN_TOKEN'):
+            return jsonify({"success": False, "message": "未授权"}), 401
+        
+        engine = recommender_service._engine
+        
+        # 获取歌曲所有评论
+        query = text("""
+            SELECT comment_id, content 
+            FROM song_comments 
+            WHERE unified_song_id = :song_id 
+            AND content IS NOT NULL AND LEN(content) > 0
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(query, {"song_id": song_id})
+            comments = [(row.comment_id, row.content) for row in result]
+        
+        total = len(comments)
+        updated = 0
+        
+        logger.info(f"开始重新计算歌曲 {song_id} 的 {total} 条评论情感值...")
+        
+        for comment_id, content in comments:
+            try:
+                # 使用情感分析函数（需要从comments.py导入或定义）
+                from routes.comments import analyze_sentiment
+                sentiment_score = analyze_sentiment(content)
+                is_positive = 1 if sentiment_score > 0.6 else (0 if sentiment_score < 0.4 else None)
+                
+                # 更新数据库
+                update_query = text("""
+                    UPDATE song_comments 
+                    SET sentiment_score = :sentiment, is_positive = :is_positive
+                    WHERE comment_id = :comment_id
+                """)
+                
+                with engine.begin() as conn:
+                    conn.execute(update_query, {
+                        "comment_id": comment_id,
+                        "sentiment": sentiment_score,
+                        "is_positive": is_positive
+                    })
+                
+                updated += 1
+                
+            except Exception as e:
+                logger.error(f"重新计算评论 {comment_id} 失败: {e}")
+        
+        # 更新歌曲的平均情感值
+        update_song_query = text("""
+            UPDATE enhanced_song_features 
+            SET avg_sentiment = ISNULL(
+                (SELECT AVG(CAST(sentiment_score as FLOAT)) 
+                 FROM song_comments 
+                 WHERE unified_song_id = :song_id),
+                0.5
+            )
+            WHERE song_id = :song_id
+        """)
+        
+        with engine.begin() as conn:
+            conn.execute(update_song_query, {"song_id": song_id})
+        
+        logger.info(f"歌曲 {song_id} 情感值重新计算完成，更新了 {updated}/{total} 条评论")
+        
+        return jsonify({
+            "success": True,
+            "message": "情感值重新计算完成",
+            "data": {
+                "song_id": song_id,
+                "total_comments": total,
+                "updated_comments": updated
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"重新计算歌曲评论情感值失败 [{song_id}]: {e}", exc_info=True)
+        return jsonify({"success": False, "message": f"重新计算失败: {str(e)}"}), 500
+
+# 5. 获取歌曲评论统计
+@bp.route('/songs/<song_id>/comments/stats', methods=['GET'])
+def get_song_comments_stats_admin(song_id):
+    """管理员获取歌曲评论统计"""
+    try:
+        # 验证管理员权限
+        admin_token = request.headers.get('Authorization', '').replace('Bearer ', '')
+        if not admin_token or admin_token != current_app.config.get('ADMIN_TOKEN'):
+            return jsonify({"success": False, "message": "未授权"}), 401
+        
+        engine = recommender_service._engine
+        
+        query = text("""
+            SELECT 
+                COUNT(*) as total_comments,
+                SUM(liked_count) as total_likes,
+                AVG(CAST(sentiment_score as FLOAT)) as avg_sentiment,
+                SUM(CASE WHEN is_positive = 1 THEN 1 ELSE 0 END) as positive_count,
+                SUM(CASE WHEN is_positive = 0 THEN 1 ELSE 0 END) as negative_count,
+                SUM(CASE WHEN is_positive IS NULL THEN 1 ELSE 0 END) as neutral_count
+            FROM song_comments
+            WHERE unified_song_id = :song_id
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(query, {"song_id": song_id}).fetchone()
+            
+            if not result or result.total_comments == 0:
+                stats = {
+                    "total_comments": 0,
+                    "total_likes": 0,
+                    "avg_sentiment": 0.5,
+                    "positive_count": 0,
+                    "negative_count": 0,
+                    "neutral_count": 0,
+                    "positive_ratio": 0,
+                    "negative_ratio": 0,
+                    "neutral_ratio": 0
+                }
+            else:
+                total = result.total_comments
+                positive_ratio = round(result.positive_count / total * 100, 1) if total > 0 else 0
+                negative_ratio = round(result.negative_count / total * 100, 1) if total > 0 else 0
+                neutral_ratio = round(result.neutral_count / total * 100, 1) if total > 0 else 0
+                
+                stats = {
+                    "total_comments": result.total_comments,
+                    "total_likes": result.total_likes or 0,
+                    "avg_sentiment": float(result.avg_sentiment) if result.avg_sentiment else 0.5,
+                    "positive_count": result.positive_count or 0,
+                    "negative_count": result.negative_count or 0,
+                    "neutral_count": result.neutral_count or 0,
+                    "positive_ratio": positive_ratio,
+                    "negative_ratio": negative_ratio,
+                    "neutral_ratio": neutral_ratio
+                }
+        
+        return jsonify({
+            "success": True,
+            "data": {
+                "song_id": song_id,
+                "stats": stats
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"获取评论统计失败 [{song_id}]: {e}")
+        return jsonify({"success": False, "message": f"获取统计失败: {str(e)}"}), 500
