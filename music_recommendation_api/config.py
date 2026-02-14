@@ -33,7 +33,7 @@ class Config:
     # 原代码文件路径
     RECOMMENDER_CODE_PATH: Path = Path(os.getenv(
         'RECOMMENDER_CODE_PATH',
-        DATASET_DIR / 'music_recommender_system_final_improved.py'
+        DATASET_DIR / 'separated_music_recommender.py'   # ← 新文件名
     ))
     
     # API限流配置（recommender_service.py需要）

@@ -1,0 +1,9 @@
+{
+  "precision@k": 0.018000000000000002,
+  "recall@k": 0.033746429496429496,
+  "ndcg@k": 0.024803364625248178,
+  "diversity": 0.5,
+  "coverage": 0.00229597161344187,
+  "novelty": 0.0,
+  "num_users_evaluated": 300
+}

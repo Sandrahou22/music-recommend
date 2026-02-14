@@ -4,32 +4,54 @@ import logging
 from sqlalchemy import create_engine, text
 from datetime import datetime
 
-from utils.sentiment_analyzer import analyze_music_sentiment
+# ========== 删除以下导入（已移除对 utils.sentiment_analyzer 的依赖）==========
+# from utils.sentiment_analyzer import analyze_music_sentiment
+# =========================================================================
 
 def analyze_sentiment_local(text):
-    """使用新的音乐情感分析器"""
-    score, _ = analyze_music_sentiment(str(text))
-    return score
+    """本地词库情感分析（纯规则，不依赖外部包）"""
+    text = str(text).lower()
+    
+    positive_words = ['喜欢', '好听', '爱', '棒', '优秀', '经典', '完美', '赞', '支持', '推荐',
+                     '舒服', '温暖', '感动', '美好', '好听', '动听', '美妙', '优美', '感人',
+                     '精彩', '出色', '惊艳', '超赞', '无敌', '太棒了', '爱了', '神曲', '收藏',
+                     '循环', '单曲循环', '必听', '舒适', '惬意', '愉悦', '开心', '快乐', '高兴',
+                     '满意', '惊喜', '享受', '陶醉', '沉醉', '迷人', '动人', '感人', '治愈',
+                     '放松', '舒缓', '轻柔', '温柔', '甜美', '清新', '阳光', '正能量']
+    
+    negative_words = ['讨厌', '难听', '垃圾', '差', '不好', '失望', '烂', '不喜欢', '恶心',
+                     '刺耳', '无聊', '糟糕', '反感', '受不了', '劝退', '失望', '无语',
+                     '拉胯', '不行', '弃了', '快进', '跳过', '痛苦', '难受', '烦躁',
+                     '厌恶', '遗憾', '后悔', '差劲', '糟糕', '无语', '失望']
+    
+    positive_count = 0
+    negative_count = 0
+    
+    for word in positive_words:
+        if word in text:
+            positive_count += 1
+    
+    for word in negative_words:
+        if word in text:
+            negative_count += 1
+    
+    total = positive_count + negative_count
+    if total == 0:
+        return 0.5  # 中性
+    
+    sentiment = 0.5 + (positive_count - negative_count) / (2 * total)
+    return round(max(0.0, min(1.0, sentiment)), 3)
 
 def analyze_sentiment_snownlp(text):
-    """同时使用SnowNLP和音乐分析器，取平均"""
+    """仅使用 SnowNLP 进行情感分析（失败返回 None）"""
     try:
         from snownlp import SnowNLP
         s = SnowNLP(str(text))
-        snow_score = s.sentiments
-        
-        # 使用音乐分析器
-        music_score, _ = analyze_music_sentiment(str(text))
-        
-        # 加权平均，音乐分析器权重更高
-        final_score = snow_score * 0.3 + music_score * 0.7
-        
-        return round(final_score, 3)
+        sentiment = s.sentiments
+        return round(sentiment, 3)
     except Exception as e:
         logger.warning(f"SnowNLP情感分析失败: {e}")
-        # 回退到音乐分析器
-        score, _ = analyze_music_sentiment(str(text))
-        return score
+        return None  # 失败时不回退，由上层决定是否使用本地
 
 # 配置日志
 logging.basicConfig(
@@ -73,62 +95,19 @@ def get_database_engine():
         
         raise ConnectionError("所有连接方式都失败了")
 
-def analyze_sentiment_local(text):
-    """本地简单情感分析"""
-    text = str(text).lower()
-    
-    positive_words = ['喜欢', '好听', '爱', '棒', '优秀', '经典', '完美', '赞', '支持', '推荐',
-                     '舒服', '温暖', '感动', '美好', '好听', '动听', '美妙', '优美', '感人',
-                     '精彩', '出色', '惊艳', '超赞', '无敌', '太棒了', '爱了', '神曲', '收藏',
-                     '循环', '单曲循环', '必听', '舒适', '惬意', '愉悦', '开心', '快乐', '高兴',
-                     '满意', '惊喜', '享受', '陶醉', '沉醉', '迷人', '动人', '感人', '治愈',
-                     '放松', '舒缓', '轻柔', '温柔', '甜美', '清新', '阳光', '正能量']
-    
-    negative_words = ['讨厌', '难听', '垃圾', '差', '不好', '失望', '烂', '不喜欢', '恶心',
-                     '刺耳', '无聊', '糟糕', '反感', '受不了', '劝退', '失望', '无语',
-                     '拉胯', '不行', '弃了', '快进', '跳过', '痛苦', '难受', '烦躁',
-                     '厌恶', '遗憾', '后悔', '差劲', '糟糕', '无语', '失望']
-    
-    positive_count = 0
-    negative_count = 0
-    
-    for word in positive_words:
-        if word in text:
-            positive_count += 1
-    
-    for word in negative_words:
-        if word in text:
-            negative_count += 1
-    
-    total = positive_count + negative_count
-    if total == 0:
-        return 0.5  # 中性
-    
-    sentiment = 0.5 + (positive_count - negative_count) / (2 * total)
-    return round(max(0.0, min(1.0, sentiment)), 3)
-
-def analyze_sentiment_snownlp(text):
-    """使用SnowNLP进行情感分析"""
-    try:
-        from snownlp import SnowNLP
-        s = SnowNLP(str(text))
-        sentiment = s.sentiments
-        return round(sentiment, 3)
-    except Exception as e:
-        logger.warning(f"SnowNLP情感分析失败: {e}")
-        return None
-
 def recalculate_sentiment(engine, use_snownlp=True, batch_size=500):
     """重新计算所有评论的情感分数"""
     start_time = time.time()
     
     # 检查SnowNLP是否可用
+    snownlp_available = False
     if use_snownlp:
         try:
             from snownlp import SnowNLP
-            logger.info("使用SnowNLP进行情感分析")
+            snownlp_available = True
+            logger.info("将使用 SnowNLP 进行情感分析")
         except ImportError:
-            logger.warning("SnowNLP未安装，将使用本地词库分析")
+            logger.warning("SnowNLP 未安装，将使用本地词库分析")
             use_snownlp = False
     
     # 获取所有评论
@@ -152,9 +131,9 @@ def recalculate_sentiment(engine, use_snownlp=True, batch_size=500):
     for i, (comment_id, content) in enumerate(comments):
         try:
             # 使用指定的情感分析方法
-            if use_snownlp:
+            if use_snownlp and snownlp_available:
                 sentiment_score = analyze_sentiment_snownlp(content)
-                if sentiment_score is None:  # 如果SnowNLP失败，使用本地方法
+                if sentiment_score is None:  # SnowNLP 失败，回退到本地
                     sentiment_score = analyze_sentiment_local(content)
             else:
                 sentiment_score = analyze_sentiment_local(content)
@@ -219,7 +198,7 @@ def recalculate_sentiment(engine, use_snownlp=True, batch_size=500):
     logger.info(f"失败: {errors}")
     logger.info(f"总耗时: {elapsed:.1f}秒")
     logger.info(f"平均速度: {total/elapsed:.1f} 条/秒")
-    logger.info(f"使用的方法: {'SnowNLP' if use_snownlp else '本地词库'}")
+    logger.info(f"使用的方法: {'SnowNLP + 本地' if use_snownlp else '本地词库'}")
     logger.info("="*60)
     
     return {
@@ -227,7 +206,7 @@ def recalculate_sentiment(engine, use_snownlp=True, batch_size=500):
         "updated": updated,
         "errors": errors,
         "elapsed_time": elapsed,
-        "method": "SnowNLP" if use_snownlp else "local"
+        "method": "SnowNLP + Local" if use_snownlp else "Local"
     }
 
 def get_statistics(engine):
@@ -293,8 +272,12 @@ def main():
         for name, data in stats_before.items():
             if isinstance(data, dict) and 'error' not in data:
                 if 'avg' in data:
-                    print(f"  {name}: {data['avg']:.3f}")
-                elif 'count' in data:
+                    # 修复：处理 None 值
+                    if data['avg'] is not None:
+                        print(f"  {name}: {data['avg']:.3f}")
+                    else:
+                        print(f"  {name}: None")
+                elif 'count' in data and 'sentiment_range' not in name:
                     print(f"  {name}: {data['count']:,}")
                 elif 'percentage' in data:
                     print(f"  {name}: {data['sentiment_range']} - {data['count']:,} ({data['percentage']:.1f}%)")
@@ -318,7 +301,7 @@ def main():
         
         # 开始重新计算
         print(f"\n开始重新计算情感分数...")
-        print(f"使用的方法: {'SnowNLP' if use_snownlp else '本地词库'}")
+        print(f"使用的方法: {'SnowNLP + 本地' if use_snownlp else '本地词库'}")
         
         result = recalculate_sentiment(engine, use_snownlp=use_snownlp)
         
@@ -328,8 +311,11 @@ def main():
         for name, data in stats_after.items():
             if isinstance(data, dict) and 'error' not in data:
                 if 'avg' in data:
-                    print(f"  {name}: {data['avg']:.3f}")
-                elif 'count' in data:
+                    if data['avg'] is not None:
+                        print(f"  {name}: {data['avg']:.3f}")
+                    else:
+                        print(f"  {name}: None")
+                elif 'count' in data and 'sentiment_range' not in name:
                     print(f"  {name}: {data['count']:,}")
                 elif 'percentage' in data:
                     print(f"  {name}: {data['sentiment_range']} - {data['count']:,} ({data['percentage']:.1f}%)")

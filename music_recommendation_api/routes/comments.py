@@ -475,30 +475,26 @@ def analyze_sentiment(text):
     return round(max(0.0, min(1.0, sentiment)), 3)
 
 def record_user_comment_behavior(user_id, song_id):
-    """记录用户评论行为"""
     engine = recommender_service._engine
-    
-    # 检查用户是否存在，如果不存在则创建
-    user_check = engine.execute(
-        text("SELECT 1 FROM enhanced_user_features WHERE user_id = :user_id"),
-        {"user_id": user_id}
-    ).fetchone()
-    
-    if not user_check:
-        # 创建匿名用户记录
-        engine.execute(text("""
-            INSERT INTO enhanced_user_features (user_id, nickname, source, created_at)
-            VALUES (:user_id, '匿名用户', 'external', GETDATE())
-        """), {"user_id": user_id})
-    
-    # 记录行为
-    engine.execute(text("""
-        INSERT INTO user_song_interaction (
-            user_id, song_id, behavior_type, weight, timestamp
-        ) VALUES (
-            :user_id, :song_id, 'comment', 0.8, GETDATE()
-        )
-    """), {"user_id": user_id, "song_id": song_id})
+    with engine.begin() as conn:
+        # 检查用户
+        user = conn.execute(
+            text("SELECT 1 FROM enhanced_user_features WHERE user_id = :uid"),
+            {"uid": user_id}
+        ).fetchone()
+        if not user:
+            conn.execute(text("""
+                INSERT INTO enhanced_user_features 
+                (user_id, nickname, source, activity_level, created_at, updated_at)
+                VALUES (:uid, '匿名用户', 'comment', '新用户', GETDATE(), GETDATE())
+            """), {"uid": user_id})
+        
+        # 记录评论行为
+        conn.execute(text("""
+            INSERT INTO user_song_interaction 
+            (user_id, song_id, behavior_type, weight, [timestamp])
+            VALUES (:uid, :sid, 'comment', 0.8, GETDATE())
+        """), {"uid": user_id, "sid": song_id})
 
 # 创建点赞记录表（需要在数据库中添加）
 def create_comment_likes_table():

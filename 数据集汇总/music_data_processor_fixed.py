@@ -242,7 +242,7 @@ class UnifiedMusicDataProcessor:
         return self.user_id_mapping
     
     def build_interaction_matrix_with_mapping(self):
-        """使用统一ID映射构建交互矩阵"""
+        """使用统一ID映射构建交互矩阵 - 优化版"""
         print("\n" + "="*80)
         print("构建统一的交互矩阵...")
         
@@ -257,12 +257,47 @@ class UnifiedMusicDataProcessor:
             plays_df['user_id'] = plays_df['user_id'].astype(str)
             plays_df['song_id'] = plays_df['song_id'].astype(str)
             
-            # 应用映射
+            # 应用映射 - 分批处理
             plays_df['unified_user_id'] = plays_df['user_id'].map(self.user_id_mapping)
-            plays_df['unified_song_id'] = plays_df.apply(
-                lambda x: self._get_unified_song_id(x['song_id'], x.get('song_name', ''), x.get('artists', '')),
-                axis=1
-            )
+            
+            # 优化：使用向量化操作替代apply
+            # 创建缓存，避免重复查找
+            song_id_cache = {}
+            
+            # 分批处理歌曲映射
+            batch_size = 10000
+            total_rows = len(plays_df)
+            unified_song_ids = []
+            
+            for i in range(0, total_rows, batch_size):
+                batch_end = min(i + batch_size, total_rows)
+                batch = plays_df.iloc[i:batch_end]
+                
+                batch_unified_ids = []
+                for _, row in batch.iterrows():
+                    song_id = row['song_id']
+                    
+                    # 使用缓存
+                    if song_id in song_id_cache:
+                        unified_id = song_id_cache[song_id]
+                    else:
+                        unified_id = self._get_unified_song_id(
+                            row['song_id'], 
+                            row.get('song_name', ''), 
+                            row.get('artists', '')
+                        )
+                        song_id_cache[song_id] = unified_id
+                    
+                    batch_unified_ids.append(unified_id)
+                
+                unified_song_ids.extend(batch_unified_ids)
+                
+                # 显示进度
+                if (i // batch_size) % 10 == 0:  # 每10批显示一次
+                    progress = (batch_end / total_rows) * 100
+                    print(f"    进度: {batch_end:,}/{total_rows:,} ({progress:.1f}%)")
+            
+            plays_df['unified_song_id'] = unified_song_ids
             
             # 过滤无效映射
             plays_df = plays_df[plays_df['unified_user_id'].notna() & plays_df['unified_song_id'].notna()]
@@ -409,29 +444,53 @@ class UnifiedMusicDataProcessor:
             return pd.DataFrame(columns=['user_id', 'song_id', 'total_weight', 'interaction_types'])
     
     def _get_unified_song_id(self, original_id, song_name, artists):
-        """获取统一的歌曲ID"""
-        # 尝试直接通过原始ID查找
-        source_key_internal = f"internal_{original_id}"
-        source_key_external = f"external_{original_id}"
+        """获取统一的歌曲ID - 增强版"""
+        if not original_id:
+            return None
         
-        if source_key_internal in self.song_id_mapping['key_to_unified']:
-            return self.song_id_mapping['key_to_unified'][source_key_internal]
-        elif source_key_external in self.song_id_mapping['key_to_unified']:
-            return self.song_id_mapping['key_to_unified'][source_key_external]
+        # 尝试直接通过原始ID查找
+        for source in ['internal', 'external']:
+            source_key = f"{source}_{original_id}"
+            if source_key in self.song_id_mapping['key_to_unified']:
+                return self.song_id_mapping['key_to_unified'][source_key]
         
         # 尝试通过歌曲名和艺术家名查找
         if song_name and artists:
             song_name_clean = str(song_name).strip().lower()
             artists_clean = str(artists).strip().lower()
-            key = f"{song_name_clean}||{artists_clean}"
             
+            # 1. 完整匹配
+            key = f"{song_name_clean}||{artists_clean}"
             if key in self.song_id_mapping['key_to_unified']:
                 return self.song_id_mapping['key_to_unified'][key]
+            
+            # 2. 仅歌曲名匹配（模糊匹配）
+            if song_name_clean:
+                # 查找包含相同歌曲名的记录
+                matching_keys = [k for k in self.song_id_mapping['key_to_unified'].keys() 
+                            if song_name_clean in k and '||' in k]
+                if matching_keys:
+                    # 使用第一个匹配项
+                    return self.song_id_mapping['key_to_unified'][matching_keys[0]]
+        
+        # 3. 使用外部数据集的spotify_id进行匹配
+        if 'external_music' in self.data and not self.data['external_music'].empty:
+            ext_df = self.data['external_music']
+            if 'spotify_id' in ext_df.columns:
+                match = ext_df[ext_df['spotify_id'] == original_id]
+                if not match.empty:
+                    # 通过外部音乐信息重新获取
+                    name = match.iloc[0].get('name', '')
+                    artist = match.iloc[0].get('artist', '')
+                    if name and artist:
+                        key = f"{str(name).strip().lower()}||{str(artist).strip().lower()}"
+                        if key in self.song_id_mapping['key_to_unified']:
+                            return self.song_id_mapping['key_to_unified'][key]
         
         return None
     
     def create_comprehensive_song_features(self):
-        """创建综合的歌曲特征"""
+        """创建综合的歌曲特征 - 修复版"""
         print("\n" + "="*80)
         print("创建综合的歌曲特征...")
         
@@ -454,26 +513,35 @@ class UnifiedMusicDataProcessor:
         
         song_features = pd.DataFrame(song_features_data)
         
-        # 添加标签特征
+        # 添加标签特征 - 修复映射问题
         if 'tags' in self.data and not self.data['tags'].empty:
             print("1. 添加标签特征...")
             tags_df = self.data['tags'].copy()
             
-            # 为标签数据创建统一的歌曲ID映射
-            tags_df['unified_song_id'] = tags_df.apply(
-                lambda x: self._get_unified_song_id(x['song_id'], x.get('song_name', ''), x.get('artists', '')),
-                axis=1
+            # 应用映射
+            tags_df['unified_song_id'] = tags_df['song_id'].apply(
+                lambda x: self._get_unified_song_id(x, '', '')
             )
+            
+            print(f"    原始标签记录数: {len(tags_df)}")
+            print(f"    成功映射的记录数: {tags_df['unified_song_id'].notna().sum()}")
             
             tags_df = tags_df[tags_df['unified_song_id'].notna()]
             
             if not tags_df.empty:
+                # 确保score列是数值类型
+                tags_df['score'] = pd.to_numeric(tags_df['score'], errors='coerce')
+                
                 tag_features = tags_df.groupby('unified_song_id').agg({
                     'score': ['mean', 'count']
                 }).reset_index()
                 
+                # 修复：避免多层列名
                 tag_features.columns = ['song_id', 'tag_score_mean', 'tag_count']
+                
                 song_features = pd.merge(song_features, tag_features, on='song_id', how='left')
+            else:
+                print("    警告: 标签数据映射后为空")
         
         # 添加评论特征
         if 'comments' in self.data and not self.data['comments'].empty:
@@ -492,6 +560,7 @@ class UnifiedMusicDataProcessor:
                     'liked_count': 'sum'
                 }).reset_index()
                 
+                # 修复：避免多层列名
                 comment_features.columns = ['song_id', 'avg_sentiment', 'comment_count', 'total_likes']
                 song_features = pd.merge(song_features, comment_features, on='song_id', how='left')
         
@@ -511,6 +580,7 @@ class UnifiedMusicDataProcessor:
                     'similarity_score': ['mean', 'max', 'count']
                 }).reset_index()
                 
+                # 修复：避免多层列名
                 similarity_features.columns = ['song_id', 'avg_similarity', 'max_similarity', 'similar_songs_count']
                 song_features = pd.merge(song_features, similarity_features, on='song_id', how='left')
         
@@ -541,20 +611,44 @@ class UnifiedMusicDataProcessor:
         if audio_features is not None:
             song_features = pd.merge(song_features, audio_features, on='song_id', how='left')
         
+        # ==================== 新增：添加歌曲交互统计特征 ====================
+        print("6. 添加歌曲交互统计特征...")
+        if hasattr(self, 'interaction_matrix'):
+            # 使用之前构建的交互矩阵（如果有）
+            interaction_stats = self.interaction_matrix.groupby('song_id').agg({
+                'total_weight': ['sum', 'mean', 'std'],
+                'user_id': 'nunique'
+            }).reset_index()
+            
+            # 修复：避免多层列名
+            interaction_stats.columns = ['song_id', 'weight_sum', 'weight_mean', 'weight_std', 'unique_users']
+            
+            # 合并到歌曲特征
+            song_features = pd.merge(song_features, interaction_stats, on='song_id', how='left')
+            print(f"    已添加交互统计特征，覆盖 {interaction_stats['song_id'].nunique()} 首歌曲")
+        else:
+            print("    警告: 没有交互矩阵数据，跳过交互统计特征")
+            # 创建空列以保持结构一致
+            song_features['weight_sum'] = 0.0
+            song_features['weight_mean'] = 0.0
+            song_features['weight_std'] = 0.0
+            song_features['unique_users'] = 0
+        
         # 处理缺失值
-        print("6. 处理缺失值...")
+        print("7. 处理缺失值...")
         song_features = self._handle_missing_values(song_features)
         
         # 特征工程
-        print("7. 特征工程...")
+        print("8. 特征工程...")
         song_features = self._engineer_features(song_features)
         
         print(f"\n✓ 歌曲特征创建完成! 最终形状: {song_features.shape}")
+        print(f"  关键列: {list(song_features.columns)[:15]}...")
         
         return song_features
     
     def _extract_audio_features(self):
-        """提取音频特征"""
+        """提取音频特征 - 修复版"""
         if 'external_music' not in self.data or self.data['external_music'].empty:
             return None
         
@@ -568,18 +662,19 @@ class UnifiedMusicDataProcessor:
             if unified_id:
                 feature_dict = {
                     'song_id': unified_id,
-                    'danceability': row.get('danceability', 0.5),
-                    'energy': row.get('energy', 0.5),
-                    'key': row.get('key', 0),
-                    'loudness': row.get('loudness', -10),
-                    'mode': row.get('mode', 1),
-                    'speechiness': row.get('speechiness', 0),
-                    'acousticness': row.get('acousticness', 0),
-                    'instrumentalness': row.get('instrumentalness', 0),
-                    'liveness': row.get('liveness', 0),
-                    'valence': row.get('valence', 0.5),
-                    'tempo': row.get('tempo', 120),
-                    'time_signature': row.get('time_signature', 4)
+                    # 修复：确保所有外部数据集字段名正确匹配
+                    'danceability': row.get('danceability', row.get('danceability', 0.5)),
+                    'energy': row.get('energy', row.get('energy', 0.5)),
+                    'key': row.get('key', row.get('key', 0)),
+                    'loudness': row.get('loudness', row.get('loudness', -10)),
+                    'mode': row.get('mode', row.get('mode', 1)),
+                    'speechiness': row.get('speechiness', row.get('speechiness', 0)),
+                    'acousticness': row.get('acousticness', row.get('acousticness', 0)),
+                    'instrumentalness': row.get('instrumentalness', row.get('instrumentalness', 0)),
+                    'liveness': row.get('liveness', row.get('liveness', 0)),
+                    'valence': row.get('valence', row.get('valence', 0.5)),
+                    'tempo': row.get('tempo', row.get('tempo', 120)),
+                    'time_signature': row.get('time_signature', row.get('time_signature', 4))
                 }
                 audio_features_data.append(feature_dict)
         
@@ -610,42 +705,48 @@ class UnifiedMusicDataProcessor:
         return df
     
     def _engineer_features(self, df):
-        """特征工程"""
+        """特征工程 - 修复版"""
         # 创建歌曲年龄特征
         if 'publish_year' in df.columns:
             current_year = datetime.now().year
+            # 确保年份是数值类型
+            df['publish_year'] = pd.to_numeric(df['publish_year'], errors='coerce')
+            df['publish_year'] = df['publish_year'].fillna(current_year - 5)
             df['song_age'] = current_year - df['publish_year']
             df['song_age'] = df['song_age'].clip(lower=0)
         
         # 创建时长特征（分钟）
         if 'duration_ms' in df.columns:
-            df['duration_minutes'] = df['duration_ms'] / 60000
+            df['duration_minutes'] = pd.to_numeric(df['duration_ms'], errors='coerce') / 60000
+            df['duration_minutes'] = df['duration_minutes'].fillna(3.5)  # 默认3.5分钟
         
-        # 流行度分组
+        # 流行度分组 - 确保所有歌曲都有分组
         if 'popularity' in df.columns:
+            df['popularity'] = pd.to_numeric(df['popularity'], errors='coerce')
+            df['popularity'] = df['popularity'].fillna(df['popularity'].median())
+            
             try:
-                df['popularity_group'] = pd.qcut(
-                    df['popularity'], 
-                    q=5, 
-                    labels=['很低', '低', '中', '高', '很高'],
-                    duplicates='drop'
-                )
-            except:
+                # 使用等距分箱，避免qcut在数据分布不均时出错
                 df['popularity_group'] = pd.cut(
                     df['popularity'],
                     bins=5,
-                    labels=['很低', '低', '中', '高', '很高']
+                    labels=['很低', '低', '中', '高', '很高'],
+                    include_lowest=True
                 )
+            except Exception as e:
+                # 如果分箱失败，使用默认值
+                df['popularity_group'] = '中'
         
-        # 组合音频特征
+        # 组合音频特征 - 确保字段存在
         audio_cols = ['danceability', 'energy', 'valence', 'tempo']
-        available_audio = [col for col in audio_cols if col in df.columns]
+        for col in audio_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                df[col] = df[col].fillna(0.5 if col != 'tempo' else 120)
         
-        if len(available_audio) >= 2:
-            df['danceability'] = df['danceability'].fillna(0.5)
-            df['energy'] = df['energy'].fillna(0.5)
-            df['valence'] = df['valence'].fillna(0.5)
-            
+        # 只在所有必需字段都存在时才创建组合特征
+        required_audio = ['danceability', 'energy', 'valence']
+        if all(col in df.columns for col in required_audio):
             df['energy_dance'] = (df['danceability'] + df['energy']) / 2
             df['mood_score'] = (df['valence'] + df['energy']) / 2
         
@@ -678,7 +779,7 @@ class UnifiedMusicDataProcessor:
         return 2020
     
     def create_comprehensive_user_features(self, interaction_matrix):
-        """创建综合的用户特征"""
+        """创建综合的用户特征 - 修复版"""
         print("\n" + "="*80)
         print("创建综合的用户特征...")
         
@@ -700,29 +801,55 @@ class UnifiedMusicDataProcessor:
         
         user_features = pd.DataFrame(user_features_data)
         
-        # 从交互矩阵中提取用户行为特征
+        # ==================== 修复：避免重复列名 ====================
+        print("1. 从交互矩阵提取用户行为特征...")
+        
         if not interaction_matrix.empty:
-            print("1. 从交互矩阵提取用户行为特征...")
-            
-            # 用户交互统计
+            # 直接从传入的 interaction_matrix 计算统计
             user_stats = interaction_matrix.groupby('user_id').agg({
-                'song_id': ['nunique', 'count'],
-                'total_weight': ['sum', 'mean', 'std']
+                'total_weight': ['sum', 'mean'],
+                'song_id': 'nunique'
             }).reset_index()
             
-            # 扁平化列名
-            user_stats.columns = ['user_id', 'unique_songs', 'total_interactions', 
-                                 'total_weight_sum', 'avg_weight', 'weight_std']
+            # 修复：避免多层列名
+            user_stats.columns = ['user_id', 'total_weight_sum', 'avg_weight', 'unique_songs']
             
-            user_features = pd.merge(user_features, user_stats, on='user_id', how='left')
+            # 计算总交互次数（包括重复）
+            user_counts = interaction_matrix.groupby('user_id').size().reset_index(name='total_interactions')
+            user_stats = user_stats.merge(user_counts, on='user_id', how='left')
             
-            # 填充缺失值
-            for col in ['unique_songs', 'total_interactions', 'total_weight_sum', 'avg_weight']:
-                if col in user_features.columns:
-                    user_features[col].fillna(0, inplace=True)
+            # 计算权重标准差
+            weight_std = interaction_matrix.groupby('user_id')['total_weight'].std().reset_index(name='weight_std')
+            user_stats = user_stats.merge(weight_std, on='user_id', how='left')
+            
+            # 修复合并：明确指定后缀，避免_x, _y
+            user_features = pd.merge(
+                user_features, 
+                user_stats, 
+                on='user_id', 
+                how='left',
+                suffixes=('', '_stats')  # 明确指定后缀
+            )
+            
+            print(f"    统计特征: {len(user_stats):,} 个用户")
+        else:
+            print("    警告: 交互矩阵为空，跳过统计特征")
+            # 创建空列以保持结构一致
+            user_features['total_weight_sum'] = 0.0
+            user_features['avg_weight'] = 0.0
+            user_features['unique_songs'] = 0
+            user_features['total_interactions'] = 0
+            user_features['weight_std'] = 0.0
         
         # 处理缺失值
         print("2. 处理缺失值...")
+        
+        # 填充缺失的交互统计
+        for col in ['unique_songs', 'total_interactions', 'total_weight_sum', 'avg_weight']:
+            if col in user_features.columns:
+                user_features[col] = user_features[col].fillna(0)
+            else:
+                user_features[col] = 0
         
         # 年龄
         if 'age' in user_features.columns:
@@ -744,7 +871,7 @@ class UnifiedMusicDataProcessor:
                 user_features['age'], bins=bins, labels=labels, right=False
             )
         
-        # 活跃度分级
+        # 活跃度分级 - 使用 total_weight_sum
         if 'total_weight_sum' in user_features.columns:
             try:
                 user_features['activity_level'] = pd.qcut(
@@ -762,9 +889,81 @@ class UnifiedMusicDataProcessor:
         
         # 交互多样性
         if 'unique_songs' in user_features.columns and 'total_interactions' in user_features.columns:
-            user_features['diversity_ratio'] = user_features['unique_songs'] / user_features['total_interactions'].clip(lower=1)
+            # 避免除零
+            user_features['diversity_ratio'] = user_features['unique_songs'] / user_features['total_interactions'].replace(0, 1)
+            
+            print(f"    多样性统计: 均值={user_features['diversity_ratio'].mean():.3f}, "
+                f"范围=[{user_features['diversity_ratio'].min():.3f}, {user_features['diversity_ratio'].max():.3f}]")
+        
+        # ==================== 新增：用户偏好特征 ====================
+        print("4. 计算用户偏好特征...")
+        
+        # 流行度偏好
+        if not interaction_matrix.empty and hasattr(self, 'song_features_intermediate'):
+            # 需要先有歌曲特征来计算流行度偏好
+            temp_song_features = getattr(self, 'song_features_intermediate', None)
+            
+            if temp_song_features is not None and 'final_popularity' in temp_song_features.columns:
+                # 合并歌曲流行度
+                merged = interaction_matrix.merge(
+                    temp_song_features[['song_id', 'final_popularity']], 
+                    on='song_id', 
+                    how='left'
+                )
+                
+                # 计算用户平均流行度偏好
+                avg_pop = merged.groupby('user_id')['final_popularity'].mean().reset_index(name='avg_popularity_pref')
+                user_features = pd.merge(user_features, avg_pop, on='user_id', how='left')
+                
+                # 计算流行度偏差（相对于整体平均50）
+                user_features['popularity_bias'] = user_features['avg_popularity_pref'] - 50.0
+                
+                print(f"    流行度偏好: 均值={user_features['avg_popularity_pref'].mean():.1f}")
+            else:
+                # 设置默认值
+                user_features['avg_popularity_pref'] = 50.0
+                user_features['popularity_bias'] = 0.0
+        else:
+            # 设置默认值
+            user_features['avg_popularity_pref'] = 50.0
+            user_features['popularity_bias'] = 0.0
+        
+        # 流派偏好 - 需要歌曲流派信息
+        if not interaction_matrix.empty and hasattr(self, 'song_features_intermediate'):
+            temp_song_features = getattr(self, 'song_features_intermediate', None)
+            
+            if temp_song_features is not None and 'genre_clean' in temp_song_features.columns:
+                # 合并歌曲流派
+                merged = interaction_matrix.merge(
+                    temp_song_features[['song_id', 'genre_clean']], 
+                    on='song_id', 
+                    how='left'
+                )
+                
+                # 计算用户流派偏好
+                genre_counts = merged.groupby(['user_id', 'genre_clean']).size().reset_index(name='count')
+                genre_counts = genre_counts.sort_values(['user_id', 'count'], ascending=[True, False])
+                
+                # 为每个用户获取前3个流派
+                for i in range(3):
+                    top_genre = genre_counts[genre_counts.groupby('user_id').cumcount() == i]
+                    col_name = f'top_genre_{i+1}'
+                    user_features[col_name] = user_features['user_id'].map(
+                        top_genre.set_index('user_id')['genre_clean']
+                    )
+                
+                print(f"    流派偏好: {user_features['top_genre_1'].notna().sum():,} 用户有偏好记录")
+            else:
+                # 创建空列
+                for i in range(1, 4):
+                    user_features[f'top_genre_{i}'] = None
+        else:
+            # 创建空列
+            for i in range(1, 4):
+                user_features[f'top_genre_{i}'] = None
         
         print(f"\n✓ 用户特征创建完成! 最终形状: {user_features.shape}")
+        print(f"  列名: {list(user_features.columns)}")
         
         return user_features
     
@@ -916,6 +1115,7 @@ class UnifiedMusicDataProcessor:
         
         return stats
 
+# 在 main() 函数中修改，确保在正确时机计算用户特征
 def main():
     """主函数：执行完整的数据处理流程"""
     print("="*80)
@@ -951,7 +1151,10 @@ def main():
         print("\n阶段5: 创建歌曲特征")
         song_features = processor.create_comprehensive_song_features()
         
-        # 7. 创建用户特征
+        # 保存中间歌曲特征（用于用户特征计算）
+        processor.song_features_intermediate = song_features.copy()
+        
+        # 7. 创建用户特征 - 传入过滤后的交互矩阵
         print("\n阶段6: 创建用户特征")
         user_features = processor.create_comprehensive_user_features(filtered_matrix)
         

@@ -128,11 +128,29 @@ function switchPage(page, element) {
     setTimeout(() => {
         if (page === 'songs') {
             console.log('切换到歌曲管理页面');
-            loadSongsList(1);
+            if (typeof loadGenresForFilter === 'function') {
+                loadGenresForFilter().then(() => {
+                    loadSongsList(1);
+                }).catch(() => {
+                    loadSongsList(1);
+                });
+            } else {
+                console.warn('loadGenresForFilter 未定义，跳过加载');
+                loadSongsList(1);
+            }
         }
         if (page === 'users') {
             console.log('切换到用户管理页面');
-            loadUsersList(1);
+            if (typeof loadActivityLevelsForFilter === 'function') {
+                loadActivityLevelsForFilter().then(() => {
+                    loadUsersList(1);
+                }).catch(() => {
+                    loadUsersList(1);
+                });
+            } else {
+                console.warn('loadActivityLevelsForFilter 未定义，跳过加载');
+                loadUsersList(1);
+            }
         }
         if (page === 'config') {
             console.log('切换到系统配置页面');
@@ -1795,34 +1813,32 @@ async function openEditSongModal(songId) {
         }
         
         // 设置音频特征
-        const features = song.audio_features || {};
-        
         const danceSlider = document.getElementById('edit-danceability');
         const danceValue = document.getElementById('edit-dance-val');
         if (danceSlider && danceValue) {
-            danceSlider.value = features.danceability || 0.5;
-            danceValue.textContent = features.danceability || 0.5;
+            danceSlider.value = song.danceability !== undefined ? song.danceability : 0.5;
+            danceValue.textContent = song.danceability !== undefined ? song.danceability.toFixed(2) : 0.5;
         }
-        
+
         const energySlider = document.getElementById('edit-energy');
         const energyValue = document.getElementById('edit-energy-val');
         if (energySlider && energyValue) {
-            energySlider.value = features.energy || 0.5;
-            energyValue.textContent = features.energy || 0.5;
+            energySlider.value = song.energy !== undefined ? song.energy : 0.5;
+            energyValue.textContent = song.energy !== undefined ? song.energy.toFixed(2) : 0.5;
         }
-        
+
         const valenceSlider = document.getElementById('edit-valence');
         const valenceValue = document.getElementById('edit-valence-val');
         if (valenceSlider && valenceValue) {
-            valenceSlider.value = features.valence || 0.5;
-            valenceValue.textContent = features.valence || 0.5;
+            valenceSlider.value = song.valence !== undefined ? song.valence : 0.5;
+            valenceValue.textContent = song.valence !== undefined ? song.valence.toFixed(2) : 0.5;
         }
-        
+
         const tempoSlider = document.getElementById('edit-tempo');
         const tempoValue = document.getElementById('edit-tempo-val');
         if (tempoSlider && tempoValue) {
-            tempoSlider.value = features.tempo || 120;
-            tempoValue.textContent = features.tempo || 120;
+            tempoSlider.value = song.tempo !== undefined ? song.tempo : 120;
+            tempoValue.textContent = song.tempo !== undefined ? Math.round(song.tempo) : 120;
         }
         
         // 【关键修复】确保切换到歌曲信息选项卡
@@ -3262,3 +3278,67 @@ function renderCommentsTable() {
         `;
     }).join('');
 }
+
+// ==================== 动态加载下拉框数据 ====================
+
+async function loadGenresForFilter() {
+    const select = document.getElementById('song-genre-filter');
+    if (!select) return;
+    
+    try {
+        const res = await fetch(`${API_BASE_URL}/admin/songs/genres`, {
+            headers: {'Authorization': `Bearer ${adminToken}`}
+        });
+        const result = await res.json();
+        if (result.success && Array.isArray(result.data)) {
+            // 清空并添加“所有流派”选项
+            select.innerHTML = '<option value="">所有流派</option>';
+            result.data.forEach(genre => {
+                const option = document.createElement('option');
+                option.value = genre;
+                option.textContent = genre;
+                select.appendChild(option);
+            });
+            // 默认选中第一个（所有流派）
+            select.value = '';
+        } else {
+            console.warn('获取流派列表失败，使用默认值');
+            // 可设置一些默认值，但建议不设置，让用户知道加载失败
+            select.innerHTML = '<option value="">所有流派</option><option value="Pop">Pop</option><option value="Rock">Rock</option>';
+        }
+    } catch (err) {
+        console.error('加载流派列表失败:', err);
+        select.innerHTML = '<option value="">所有流派</option><option value="Pop">Pop</option><option value="Rock">Rock</option>';
+    }
+}
+
+async function loadActivityLevelsForFilter() {
+    const select = document.getElementById('user-activity-filter');
+    if (!select) return;
+    
+    try {
+        const res = await fetch(`${API_BASE_URL}/admin/users/activity-levels`, {
+            headers: {'Authorization': `Bearer ${adminToken}`}
+        });
+        const result = await res.json();
+        if (result.success && Array.isArray(result.data)) {
+            select.innerHTML = '<option value="">所有活跃度</option>';
+            result.data.forEach(level => {
+                const option = document.createElement('option');
+                option.value = level;
+                option.textContent = level;
+                select.appendChild(option);
+            });
+            select.value = '';
+        } else {
+            console.warn('获取活跃度列表失败，使用默认值');
+            select.innerHTML = '<option value="">所有活跃度</option><option value="high">高活跃</option><option value="medium">中活跃</option><option value="low">低活跃</option>';
+        }
+    } catch (err) {
+        console.error('加载活跃度列表失败:', err);
+        select.innerHTML = '<option value="">所有活跃度</option><option value="high">高活跃</option><option value="medium">中活跃</option><option value="low">低活跃</option>';
+    }
+}
+
+window.loadGenresForFilter = loadGenresForFilter;
+window.loadActivityLevelsForFilter = loadActivityLevelsForFilter;

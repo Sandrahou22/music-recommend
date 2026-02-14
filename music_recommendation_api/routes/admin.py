@@ -1915,3 +1915,54 @@ def get_song_detail_admin(song_id):
     except Exception as e:
         logger.error(f"获取歌曲详情失败: {e}")
         return jsonify({"success": False, "message": f"获取失败: {str(e)}"}), 500
+    
+# ==================== 动态加载下拉框数据接口 ====================
+
+@bp.route('/songs/genres', methods=['GET'])
+@admin_required
+def get_all_genres():
+    """获取所有不重复的流派（用于下拉框）"""
+    engine = recommender_service._engine
+    try:
+        with engine.connect() as conn:
+            # 合并 genre 和 genre_clean 字段，去重并排序
+            result = conn.execute(text("""
+                SELECT DISTINCT genre FROM enhanced_song_features 
+                WHERE genre IS NOT NULL AND genre != ''
+                UNION
+                SELECT DISTINCT genre_clean FROM enhanced_song_features 
+                WHERE genre_clean IS NOT NULL AND genre_clean != ''
+                ORDER BY genre
+            """))
+            genres = [row[0] for row in result]
+        return jsonify({"success": True, "data": genres})
+    except Exception as e:
+        logger.error(f"获取流派列表失败: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+@bp.route('/users/activity-levels', methods=['GET'])
+@admin_required
+def get_all_activity_levels():
+    """获取所有不重复的用户活跃度（用于下拉框）"""
+    engine = recommender_service._engine
+    try:
+        with engine.connect() as conn:
+            # 获取所有活跃度，并按自定义顺序排序（high > medium > low > 其他）
+            result = conn.execute(text("""
+                SELECT DISTINCT activity_level 
+                FROM enhanced_user_features 
+                WHERE activity_level IS NOT NULL AND activity_level != ''
+                ORDER BY 
+                    CASE 
+                        WHEN activity_level = 'high' THEN 1
+                        WHEN activity_level = 'medium' THEN 2
+                        WHEN activity_level = 'low' THEN 3
+                        ELSE 4
+                    END
+            """))
+            levels = [row[0] for row in result]
+        return jsonify({"success": True, "data": levels})
+    except Exception as e:
+        logger.error(f"获取活跃度列表失败: {e}")
+        return jsonify({"success": False, "message": str(e)}), 500

@@ -1,0 +1,191 @@
+{
+  "song_features": {
+    "popularity_stats": {
+      "mean": 19.23781583043947,
+      "median": 0.0,
+      "std": 39.004510750706146,
+      "min": 0.0,
+      "max": 100.0
+    },
+    "pop_100_ratio": 15.92024907196743,
+    "audio_features": {
+      "danceability": {
+        "mean": 0.5017165189797629,
+        "median": 0.497,
+        "std": 0.15880333070810007,
+        "missing": 0,
+        "missing_ratio": 0.0
+      },
+      "energy": {
+        "mean": 0.6942520961501617,
+        "median": 0.744,
+        "std": 0.22462432872103,
+        "missing": 0,
+        "missing_ratio": 0.0
+      },
+      "valence": {
+        "mean": 0.43547026942881095,
+        "median": 0.405,
+        "std": 0.2284918259259495,
+        "missing": 0,
+        "missing_ratio": 0.0
+      },
+      "tempo": {
+        "mean": 123.60353772003353,
+        "median": 121.989,
+        "std": 26.881829995194334,
+        "missing": 0,
+        "missing_ratio": 0.0
+      }
+    },
+    "duration_stats": {
+      "mean_seconds": 199.06895593342117,
+      "median_seconds": 214.666,
+      "std_seconds": 132.39940258282851
+    },
+    "genre_counts": {
+      "Rock": 9288,
+      "华语流行": 1545,
+      "Electronic": 1257,
+      "欧美流行": 1124,
+      "Metal": 797,
+      "Pop": 483,
+      "Rap": 334,
+      "Country": 209,
+      "RnB": 207,
+      "日本流行": 198,
+      "Reggae": 182,
+      "Punk": 151,
+      "Folk": 144,
+      "Jazz": 123,
+      "影视原声": 123,
+      "New Age": 110,
+      "现场": 74,
+      "摇滚": 69,
+      "World": 53,
+      "民谣": 52
+    },
+    "age_stats": {
+      "mean_age": 17.209016884205486,
+      "median_age": 17.0,
+      "oldest": 124,
+      "newest": -2
+    }
+  },
+  "interaction_matrix": {
+    "basic_stats": {
+      "total_interactions": 598980,
+      "unique_users": 44535,
+      "unique_songs": 16702,
+      "sparsity": 0.9991947283950682
+    },
+    "user_interaction_stats": {
+      "mean": 13.4496463455709,
+      "median": 10.0,
+      "std": 11.14731781143919,
+      "max": 187,
+      "min": 1
+    },
+    "user_groups": {
+      "1次": 0,
+      "2-5次": 1177,
+      "6-10次": 21080,
+      "11-20次": 13868,
+      "21-50次": 7654,
+      "51-100次": 727,
+      "100+次": 29
+    },
+    "song_interaction_stats": {
+      "mean": 35.86277092563765,
+      "median": 15.0,
+      "std": 69.56241523448126,
+      "max": 1778,
+      "min": 1
+    },
+    "song_groups": {
+      "1次": 0,
+      "2-5次": 1308,
+      "6-10次": 4448,
+      "11-20次": 4077,
+      "21-50次": 3950,
+      "51-100次": 1634,
+      "100+次": 1285
+    },
+    "weight_stats": {
+      "mean": 2.2850372508651193,
+      "std": 2.729678450213857,
+      "min": 0.0,
+      "25%": 1.0,
+      "50%": 1.0,
+      "75%": 2.383128328648316,
+      "max": 24.6
+    }
+  },
+  "user_features": {
+    "basic_stats": {
+      "total_users": 44535,
+      "unique_users": 44535
+    },
+    "age_stats": {
+      "mean": 24.510048276636354,
+      "median": 25.0,
+      "std": 3.249236028492755,
+      "min": 0.0,
+      "max": 55.0
+    },
+    "age_groups": {
+      "<18": 1975,
+      "18-25": 2090,
+      "26-35": 40008,
+      "36-45": 429,
+      "46-55": 30,
+      ">55": 3
+    },
+    "gender_counts": {
+      "0": 35475,
+      "2": 4604,
+      "1": 4456
+    },
+    "listen_stats": {
+      "mean": 0.0,
+      "median": 0.0,
+      "std": 0.0,
+      "max": 0,
+      "min": 0
+    },
+    "listen_groups": {
+      "<10": 44535,
+      "10-50": 0,
+      "51-100": 0,
+      "101-500": 0,
+      "501-1000": 0,
+      "1000+": 0
+    }
+  },
+  "data_quality": {
+    "song_missing_cols": {
+      "album": 13401,
+      "language": 13397
+    },
+    "user_missing_cols": {
+      "province": 31870,
+      "city": 31870
+    },
+    "weight_outliers": {
+      "count": 101214,
+      "ratio": 16.897726134428527,
+      "lower_bound": -1.0746924929724737,
+      "upper_bound": 4.457820821620789
+    },
+    "song_consistency": {
+      "interaction_only": 0,
+      "feature_only": 0,
+      "common": 16702
+    },
+    "user_consistency": {
+      "interaction_only": 0,
+      "feature_only": 0,
+      "common": 44535
+    }
+  }
+}

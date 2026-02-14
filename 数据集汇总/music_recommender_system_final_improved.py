@@ -128,7 +128,7 @@ class DataAlignmentAndEnhancement:
         print(f"    密度: {self.density:.4f}%")
         
     def enhance_features_advanced(self):
-        """特征增强"""
+        """特征增强 - 修复列名重复问题"""
         print("\n" + "="*80)
         print("3. 特征增强...")
         
@@ -136,14 +136,40 @@ class DataAlignmentAndEnhancement:
         print("  处理歌曲特征...")
         song_features = self.filtered_song_features.copy()
         
-        # 交互统计
+        # 交互统计 - 使用 suffix 避免列名冲突
         if len(self.filtered_interactions) > 0:
             song_stats = self.filtered_interactions.groupby('song_id').agg({
-                'total_weight': ['sum', 'mean', 'count'],
+                'total_weight': ['sum', 'mean', 'std'],
                 'user_id': 'nunique'
             }).reset_index()
+            
+            # 修复：避免多层列名
             song_stats.columns = ['song_id', 'weight_sum', 'weight_mean', 'weight_std', 'unique_users']
-            song_features = song_features.merge(song_stats, on='song_id', how='left')
+            
+            # 合并时检查重复列
+            common_cols = set(song_features.columns) & set(song_stats.columns) - {'song_id'}
+            if common_cols:
+                print(f"    警告: 发现重复列 {common_cols}，将重命名")
+            
+            # 合并，使用后缀避免冲突
+            song_features = song_features.merge(
+                song_stats, 
+                on='song_id', 
+                how='left',
+                suffixes=('', '_interaction')  # 原始列不变，新列加后缀
+            )
+            
+            # 重命名回原始列名（如果愿意）
+            rename_map = {
+                'weight_sum_interaction': 'weight_sum',
+                'weight_mean_interaction': 'weight_mean',
+                'weight_std_interaction': 'weight_std',
+                'unique_users_interaction': 'unique_users'
+            }
+            for old, new in rename_map.items():
+                if old in song_features.columns:
+                    song_features[new] = song_features[old]
+                    song_features = song_features.drop(columns=[old])
         
         # 填充缺失
         for col in ['weight_sum', 'weight_mean', 'weight_std', 'unique_users']:
@@ -156,25 +182,31 @@ class DataAlignmentAndEnhancement:
         print("    计算流行度...")
         if 'popularity' in song_features.columns:
             raw_pop = pd.to_numeric(song_features['popularity'], errors='coerce').fillna(0)
-            # 【修复】确保最小流行度不为0，设为10（避免完全冷门的歌曲）
-            raw_pop = raw_pop.clip(lower=10)  # 最小流行度10分
+            raw_pop = raw_pop.clip(lower=10)
         else:
-            raw_pop = pd.Series([50] * len(song_features))  # 默认50分而非0
-
-        # 交互热度（保持原有逻辑）
-        interaction_score = np.log1p(song_features.get('weight_sum', 0))
-
-        # 组合权重（可以调整）
+            raw_pop = pd.Series([50] * len(song_features))
+        
+        # 删除可能存在的重复列
+        # 删除所有以 _x 或 _y 结尾的列
+        duplicate_cols = [col for col in song_features.columns if col.endswith('_x') or col.endswith('_y')]
+        if duplicate_cols:
+            print(f"    删除重复列: {duplicate_cols}")
+            song_features = song_features.drop(columns=duplicate_cols)
+        
+        # 交互热度
+        if 'weight_sum' in song_features.columns:
+            interaction_score = np.log1p(song_features['weight_sum'])
+        else:
+            interaction_score = pd.Series([0] * len(song_features))
+        
+        # 组合权重
         if raw_pop.sum() > 0 and interaction_score.sum() > 0:
-            # 两者都有数据：加权平均
             combined_score = raw_pop * 0.6 + interaction_score * 10 * 0.4
         elif raw_pop.sum() > 0:
-            # 只有原始流行度
             combined_score = raw_pop
         else:
-            # 只有交互数据
-            combined_score = 30 + interaction_score * 10  # 【修复】基础分30，避免从0开始
-
+            combined_score = 30 + interaction_score * 10
+        
         # 归一化到 10-100 区间
         if len(combined_score.unique()) > 1:
             try:
@@ -184,8 +216,8 @@ class DataAlignmentAndEnhancement:
             except:
                 song_features['final_popularity'] = combined_score.clip(10, 100)
         else:
-            song_features['final_popularity'] = 50.0  # 默认中间值
-
+            song_features['final_popularity'] = 50.0
+        
         # 确保无0值
         song_features['final_popularity'] = song_features['final_popularity'].replace(0, 10).fillna(50)
         song_features['final_popularity_norm'] = song_features['final_popularity'] / 100.0
@@ -194,7 +226,7 @@ class DataAlignmentAndEnhancement:
         
         # 音频特征
         audio_cols = ['danceability', 'energy', 'valence', 'tempo', 'loudness', 'speechiness', 
-                     'acousticness', 'instrumentalness', 'liveness']
+                    'acousticness', 'instrumentalness', 'liveness']
         for col in audio_cols:
             if col in song_features.columns:
                 song_features[col] = pd.to_numeric(song_features[col], errors='coerce').fillna(0.5)
@@ -212,40 +244,95 @@ class DataAlignmentAndEnhancement:
         song_features['recency_score'] = np.exp(-song_features['song_age'] / 15)
         
         # 分层
+        try:
+            percentiles = song_features['final_popularity'].quantile([0.33, 0.67]).tolist()
+            if percentiles[0] == percentiles[1]:
+                percentiles = [30, 70]
+        except:
+            percentiles = [30, 70]
+        
         song_features['popularity_tier'] = pd.cut(
             song_features['final_popularity'],
-            bins=[0, 30, 60, 100],
-            labels=['normal', 'popular', 'hit']
+            bins=[0, percentiles[0], percentiles[1], 100],
+            labels=['normal', 'popular', 'hit'],
+            include_lowest=True
         )
+        
+        # 打印统计
+        tier_counts = song_features['popularity_tier'].value_counts()
+        print(f"    流行度分层统计: {dict(tier_counts)}")
         
         # 流派
         if 'genre' in song_features.columns:
             song_features['genre'] = song_features['genre'].fillna('unknown')
-            top_genres = song_features['genre'].value_counts().head(12).index.tolist()
-            song_features['genre_clean'] = song_features['genre'].apply(lambda x: x if x in top_genres else 'other')
+            genre_counts = song_features['genre'].value_counts()
+            total_songs = len(song_features)
+            min_songs = max(10, total_songs * 0.005)
+            top_genres = genre_counts[genre_counts >= min_songs].index.tolist()
+            top_genres = top_genres[:20]
+            
+            main_genres = ['华语流行', '欧美流行', 'Rock', 'Electronic', 'Pop']
+            for main in main_genres:
+                if main in top_genres:
+                    similar = [g for g in top_genres if main in g and g != main]
+                    for sim in similar:
+                        song_features.loc[song_features['genre_clean'] == sim, 'genre_clean'] = main
+            
+            song_features['genre_clean'] = song_features['genre'].apply(
+                lambda x: x if pd.notna(x) and x in top_genres else '其他'
+            )
+            
+            print(f"    保留流派数: {len(top_genres)}，主流派: {top_genres[:5]}")
         else:
             song_features['genre'] = 'unknown'
             song_features['genre_clean'] = 'other'
         
         self.enhanced_song_features = song_features
         
-        # 2. 用户特征
+        # 2. 用户特征 - 修复列名重复
         print("  处理用户特征...")
         user_features = self.filtered_user_features.copy()
+        
+        # 删除可能存在的重复列
+        duplicate_cols = [col for col in user_features.columns if col.endswith('_x') or col.endswith('_y')]
+        if duplicate_cols:
+            print(f"    删除重复列: {duplicate_cols}")
+            user_features = user_features.drop(columns=duplicate_cols)
         
         if len(self.filtered_interactions) > 0:
             user_stats = self.filtered_interactions.groupby('user_id').agg({
                 'total_weight': ['sum', 'mean'],
                 'song_id': 'nunique'
             }).reset_index()
+            
+            # 修复列名
             user_stats.columns = ['user_id', 'total_weight_sum', 'total_weight_mean', 'unique_songs']
             
             user_counts = self.filtered_interactions.groupby('user_id').size().reset_index(name='total_interactions')
             user_stats = user_stats.merge(user_counts, on='user_id', how='left')
             
-            user_features = user_features.merge(user_stats, on='user_id', how='left')
+            # 合并时处理重复列
+            user_features = user_features.merge(
+                user_stats, 
+                on='user_id', 
+                how='left',
+                suffixes=('', '_stats')
+            )
+            
+            # 重命名回原始列名
+            rename_map = {
+                'total_weight_sum_stats': 'total_weight_sum',
+                'total_weight_mean_stats': 'total_weight_mean',
+                'unique_songs_stats': 'unique_songs',
+                'total_interactions_stats': 'total_interactions'
+            }
+            for old, new in rename_map.items():
+                if old in user_features.columns:
+                    user_features[new] = user_features[old]
+                    user_features = user_features.drop(columns=[old])
         
-        for col in ['total_interactions', 'unique_songs', 'total_weight_sum']:
+        # 填充缺失
+        for col in ['total_interactions', 'unique_songs', 'total_weight_sum', 'total_weight_mean']:
             if col not in user_features.columns:
                 user_features[col] = 0
             else:
@@ -403,6 +490,11 @@ class OptimizedMusicRecommender:
             'driver': 'ODBC Driver 18 for SQL Server'
         }
         
+        self.separated_mode = False
+        if hasattr(self, 'source_type'):
+            self.separated_mode = True
+            print(f"  分离模式: {self.source_type}")
+
         conn_str = (f"mssql+pyodbc://{db_config['username']}:{db_config['password']}"
                 f"@{db_config['server']}/{db_config['database']}"
                 f"?driver={db_config['driver'].replace(' ', '+')}&Encrypt=no")
@@ -651,19 +743,32 @@ class OptimizedMusicRecommender:
         print(f"✓ 完成，耗时: {time.time()-start:.2f}秒")
         
     def calculate_popular_songs(self):
-        """分层热门歌曲"""
+        """分层热门歌曲 - 改进版"""
         print("  1. 热门歌曲分层...")
         
-        # 按流行度分3层
+        # 使用分位数而不是固定阈值
+        pop_values = self.song_features['final_popularity'].values
+        
+        # 计算分位数
+        try:
+            q33 = np.percentile(pop_values, 33)
+            q67 = np.percentile(pop_values, 67)
+        except:
+            q33, q67 = 30, 70
+        
+        # 确保至少有梯度
+        if q67 - q33 < 20:
+            q33, q67 = 30, 70
+        
         self.tiered_songs = {
-            'hit': self.song_features[self.song_features['final_popularity'] >= 70]['song_id'].tolist(),
-            'popular': self.song_features[(self.song_features['final_popularity'] >= 40) & 
-                                         (self.song_features['final_popularity'] < 70)]['song_id'].tolist(),
-            'normal': self.song_features[self.song_features['final_popularity'] < 40]['song_id'].tolist()
+            'hit': self.song_features[self.song_features['final_popularity'] >= q67]['song_id'].tolist(),
+            'popular': self.song_features[(self.song_features['final_popularity'] >= q33) & 
+                                        (self.song_features['final_popularity'] < q67)]['song_id'].tolist(),
+            'normal': self.song_features[self.song_features['final_popularity'] < q33]['song_id'].tolist()
         }
         
         for tier, songs in self.tiered_songs.items():
-            print(f"    {tier}: {len(songs)}首")
+            print(f"    {tier}: {len(songs)}首 ({len(songs)/len(self.song_features)*100:.1f}%)")
         
         self.song_popularity = self.song_features.set_index('song_id')['final_popularity'].to_dict()
         
@@ -794,7 +899,7 @@ class OptimizedMusicRecommender:
         gc.collect()
         
     def calculate_content_similarities(self):
-        """内容相似度"""
+        """内容相似度 - 改进版"""
         print("  3. 内容相似度...")
         cache_file = os.path.join(self.cache_dir, "content_sim.pkl")
         
@@ -804,34 +909,53 @@ class OptimizedMusicRecommender:
             print(f"    从缓存加载: {len(self.content_similarities)}歌曲")
             return
         
-        features = ['danceability', 'energy', 'valence', 'final_popularity_norm', 'recency_score']
-        available = [f for f in features if f in self.song_features.columns]
+        # 选择更全面的音频特征
+        audio_features = ['danceability', 'energy', 'valence', 'tempo', 'loudness', 
+                        'speechiness', 'acousticness', 'instrumentalness', 'liveness']
+        
+        # 只使用存在的特征
+        available_features = [f for f in audio_features if f in self.song_features.columns]
+        
+        # 添加非音频特征
+        other_features = ['final_popularity_norm', 'recency_score', 'song_age']
+        available_features.extend([f for f in other_features if f in self.song_features.columns])
+        
+        print(f"    使用特征: {available_features}")
         
         song_ids = self.song_features['song_id'].tolist()
-        X = self.song_features[available].fillna(0.5).values
-        X = MinMaxScaler().fit_transform(X)
+        X = self.song_features[available_features].fillna(0.5).values
         
-        # 使用最近邻
-        n_neighbors = min(21, len(song_ids))
-        nn = NearestNeighbors(n_neighbors=n_neighbors, metric='cosine')
-        nn.fit(X)
-        distances, indices = nn.kneighbors(X)
+        # 对不同范围的特征进行标准化
+        from sklearn.preprocessing import RobustScaler
+        scaler = RobustScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # 使用更高效的最近邻算法
+        n_neighbors = min(31, len(song_ids))
+        from sklearn.neighbors import NearestNeighbors
+        nn = NearestNeighbors(n_neighbors=n_neighbors, metric='euclidean', algorithm='ball_tree')
+        nn.fit(X_scaled)
+        distances, indices = nn.kneighbors(X_scaled)
         
         self.content_similarities = {}
         for i, song_id in enumerate(song_ids):
             sims = {}
             for j in range(1, len(indices[i])):
                 neighbor = song_ids[indices[i][j]]
-                sim = 1 - distances[i][j]
-                if sim > 0.25:
+                # 使用高斯核将距离转换为相似度
+                sim = np.exp(-distances[i][j] ** 2 / 2)
+                if sim > 0.1:  # 降低阈值，保留更多相似歌曲
                     sims[neighbor] = sim
             if sims:
-                self.content_similarities[song_id] = dict(sorted(sims.items(), key=lambda x: x[1], reverse=True)[:15])
+                # 按相似度排序，取前20
+                self.content_similarities[song_id] = dict(sorted(
+                    sims.items(), key=lambda x: x[1], reverse=True
+                )[:20])
         
         with open(cache_file, 'wb') as f:
             pickle.dump(self.content_similarities, f)
         
-        print(f"    计算完成: {len(self.content_similarities)}歌曲")
+        print(f"    计算完成: {len(self.content_similarities)}歌曲，平均{np.mean([len(v) for v in self.content_similarities.values()]):.1f}个邻居")
         
     def calculate_matrix_factorization(self):
         """矩阵分解"""

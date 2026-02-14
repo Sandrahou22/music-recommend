@@ -1031,6 +1031,9 @@ async function getRecommendations() {
             
             displayRecommendations(currentRecommendations);
             
+            // 新增：记录推荐生成行为
+            recordBehavior('recommend_generate', 'generate_recommend', currentRecommendations.length);
+            
             await saveRecommendations(currentUser, currentRecommendations, algorithm);
             
             document.getElementById('current-user-id').textContent = currentUser;
@@ -1348,7 +1351,7 @@ function displayHotSongs(songs) {
     }
     
     container.innerHTML = songs.slice(0, 8).map(song => `
-        <div class="song-card" data-song-id="${song.song_id}">
+        <div class="song-card" data-song-id="${song.song_id}" data-has-audio="${song.has_audio !== false}">
             <div class="song-card-header">
                 <i class="fas fa-fire"></i>
                 <span>热门歌曲</span>
@@ -1469,48 +1472,77 @@ function displayHistory(history) {
 // ========== 最近活动功能 ==========
 async function loadRecentActivity(userId) {
     try {
-        const historyResponse = await fetch(ENDPOINTS.userHistory(userId));
-        const historyData = await historyResponse.json();
+        const response = await fetch(`${API_BASE_URL}/users/${userId}/recent-activities?limit=20`);
+        const data = await response.json();
         
-        if (historyData.success && historyData.data) {
-            const historyActivities = historyData.data.slice(0, 5).map(item => {
-                const types = item.interaction_types ? item.interaction_types.split(',') : ['play'];
-                let icon = 'fa-play';
-                let color = '#4361ee';
-                let text = `播放了歌曲《${item.song_name}》`;
-                
-                if (types.includes('collect')) {
-                    icon = 'fa-star';
-                    color = '#f72585';
-                    text = `收藏了歌曲《${item.song_name}》`;
-                } else if (types.includes('like')) {
-                    icon = 'fa-heart';
-                    color = '#f72585';
-                    text = `喜欢了歌曲《${item.song_name}》`;
-                }
-                
-                return {
-                    type: 'history',
-                    text: text,
-                    icon: icon,
-                    color: color,
-                    time: item.timestamp,
-                    id: 'hist_' + item.song_id
-                };
-            });
+        if (data.success && data.data.length > 0) {
+            // 将后端活动转换为前端活动格式
+            const backendActivities = data.data.map(act => {
+                    let text = '';
+                    let icon = 'fa-music';
+                    let color = '#4361ee';
+                    
+                    switch(act.type) {
+                        case 'play':
+                            text = `播放了歌曲《${act.song_name || '未知歌曲'}》`;
+                            icon = 'fa-play';
+                            color = '#4361ee';
+                            break;
+                        case 'like_song':
+                            text = `喜欢了歌曲《${act.song_name || '未知歌曲'}》`;
+                            icon = 'fa-heart';
+                            color = '#f72585';
+                            break;
+                        case 'comment':
+                            text = `评论了歌曲《${act.song_name || '未知歌曲'}》：${act.content?.substring(0, 30)}${act.content?.length > 30 ? '...' : ''}`;
+                            icon = 'fa-comment';
+                            color = '#06d6a0';
+                            break;
+                        case 'like_comment':
+                            text = `点赞了评论：${act.content?.substring(0, 30)}${act.content?.length > 30 ? '...' : ''}`;
+                            icon = 'fa-thumbs-up';
+                            color = '#f72585';
+                            break;
+                        case 'generate_recommend':
+                            const count = act.extra_data || 1;
+                            text = `生成了 ${count} 首推荐`;
+                            icon = 'fa-magic';
+                            color = '#7209b7';
+                            break;
+                        default:
+                            text = `进行了操作`;
+                    }
+                    
+                    return {
+                        type: act.type,
+                        text: text,
+                        icon: icon,
+                        color: color,
+                        time: act.timestamp,
+                        id: `backend_${act.type}_${act.timestamp}`
+                    };
+                });
             
-            const existingIds = new Set(recentActivities.map(a => a.text));
-            historyActivities.forEach(act => {
-                if (!existingIds.has(act.text)) {
-                    recentActivities.push(act);
-                }
-            });
+            // 合并现有活动（前端手动添加的，如推荐生成、偏好保存等）
+            const allActivities = [...backendActivities, ...recentActivities];
+            
+            // 按时间排序（最新的在前）
+            allActivities.sort((a, b) => new Date(b.time) - new Date(a.time));
+            
+            // 去重（基于 type + time，但前端手动添加的活动有唯一 id）
+            const seen = new Set();
+            recentActivities = allActivities.filter(act => {
+                const key = act.id || `${act.type}_${act.time}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            }).slice(0, MAX_ACTIVITIES);  // 限制最大数量
+            
+            renderActivities();
         }
     } catch (error) {
-        console.error('加载历史活动失败:', error);
+        console.error('加载活动失败:', error);
     }
-    
-    renderActivities();
 }
 
 // ========== 用户画像加载与显示 ==========
@@ -2119,21 +2151,35 @@ function displaySongDetail(song, explanation = null) {
     document.getElementById('detail-genre').textContent = song.genre || '未知流派';
     document.getElementById('detail-popularity').textContent = `流行度: ${song.popularity || 50}`;
     
-    // 设置音频特征
-    const features = song.audio_features || {};
-    document.getElementById('danceability-value').textContent = (features.danceability || 0.5).toFixed(2);
-    document.getElementById('danceability-bar').style.width = `${(features.danceability || 0.5) * 100}%`;
+    // 提取音频特征：优先使用 audio_features 对象，否则直接从 song 取
+    const features = song.audio_features || song;
     
-    document.getElementById('energy-value').textContent = (features.energy || 0.5).toFixed(2);
-    document.getElementById('energy-bar').style.width = `${(features.energy || 0.5) * 100}%`;
+    // 安全获取浮点数的辅助函数
+    const getFloat = (val, defaultValue = 0.5) => {
+        if (val === undefined || val === null) return defaultValue;
+        const num = parseFloat(val);
+        return isNaN(num) ? defaultValue : num;
+    };
     
-    document.getElementById('valence-value').textContent = (features.valence || 0.5).toFixed(2);
-    document.getElementById('valence-bar').style.width = `${(features.valence || 0.5) * 100}%`;
+    const danceability = getFloat(features.danceability);
+    const energy = getFloat(features.energy);
+    const valence = getFloat(features.valence);
+    const tempo = getFloat(features.tempo, 120); // 节奏默认120
     
-    document.getElementById('tempo-value').textContent = `${Math.round(features.tempo || 120)} BPM`;
+    // 更新UI
+    document.getElementById('danceability-value').textContent = danceability.toFixed(2);
+    document.getElementById('danceability-bar').style.width = `${danceability * 100}%`;
     
+    document.getElementById('energy-value').textContent = energy.toFixed(2);
+    document.getElementById('energy-bar').style.width = `${energy * 100}%`;
+    
+    document.getElementById('valence-value').textContent = valence.toFixed(2);
+    document.getElementById('valence-bar').style.width = `${valence * 100}%`;
+    
+    document.getElementById('tempo-value').textContent = `${Math.round(tempo)} BPM`;
+    
+    // 处理推荐解释（原代码不变）
     let reasonText = '基于您的音乐偏好推荐';
-    
     if (explanation) {
         if (typeof explanation === 'string') {
             reasonText = explanation;
@@ -2157,7 +2203,6 @@ function displaySongDetail(song, explanation = null) {
         ];
         reasonText = reasons[Math.floor(Math.random() * reasons.length)];
     }
-    
     document.getElementById('recommendation-reason-text').innerHTML = String(reasonText);
     
     // 设置播放按钮
@@ -2205,17 +2250,23 @@ async function submitFeedback(songId, action) {
         });
         
         const data = await response.json();
-        
         if (data.success) {
-            showNotification('反馈已提交，感谢您的意见！', 'success');
-            document.getElementById('feedback-modal').classList.remove('active');
-            document.getElementById('feedback-comment').value = '';
-        } else {
-            throw new Error(data.message || '提交反馈失败');
+            showNotification(feedback === 'like' ? '感谢您的认可！' : '我们会改进推荐', 'success');
+            const card = document.querySelector(`[data-song-id="${songId}"]`);
+            if (card) {
+                const thumbs = card.querySelectorAll('.feedback-btn-thumb');
+                thumbs.forEach(btn => btn.classList.remove('active'));
+                if (feedback === 'like') thumbs[0].classList.add('active');
+                if (feedback === 'dislike') thumbs[1].classList.add('active');
+            }
+            
+            // 新增：如果是喜欢，记录歌曲喜欢行为
+            if (feedback === 'like') {
+                recordBehavior(songId, 'like', 1.0);
+            }
         }
-    } catch (error) {
-        console.error('提交反馈失败:', error);
-        showNotification('反馈提交失败，请稍后重试', 'error');
+    } catch (e) {
+        console.error('反馈提交失败:', e);
     }
 }
 
@@ -2912,7 +2963,7 @@ function displayExploreSongs(songs) {
     }
     
     container.innerHTML = songs.map(song => `
-        <div class="song-card explore-card" data-song-id="${song.song_id}">
+        <div class="song-card explore-card" data-song-id="${song.song_id}" data-has-audio="${song.has_audio !== false}">
             <div class="song-card-header" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
                 <i class="fas fa-compact-disc"></i>
                 <span>发现</span>
@@ -4191,20 +4242,19 @@ async function likeComment(commentId, button) {
         const data = await response.json();
         
         if (data.success) {
-            // 更新按钮状态
-            if (isLiked) {
-                button.classList.remove('liked');
-            } else {
+            // 根据后端返回的 user_has_liked 设置状态
+            const userHasLiked = data.data.user_has_liked;
+            if (userHasLiked) {
                 button.classList.add('liked');
                 button.querySelector('i').className = 'fas fa-heart';
+            } else {
+                button.classList.remove('liked');
+                button.querySelector('i').className = 'far fa-heart'; // 使用空心图标表示未点赞
             }
-            
-            // 更新点赞数
             const countSpan = button.querySelector('.like-count');
             if (countSpan) {
                 countSpan.textContent = data.data.liked_count;
             }
-            
             // 动画效果
             button.querySelector('i').style.animation = 'heartBeat 0.3s';
             setTimeout(() => {

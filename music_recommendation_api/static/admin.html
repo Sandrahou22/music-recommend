@@ -255,12 +255,6 @@
                                         <button onclick="searchSongs()"><i class="fas fa-search"></i></button>
                                     </div>
                                     <select id="song-genre-filter" class="form-control" style="width: 150px;">
-                                        <option value="">所有流派</option>
-                                        <option value="Pop">Pop</option>
-                                        <option value="Rock">Rock</option>
-                                        <option value="Electronic">Electronic</option>
-                                        <option value="华语流行">华语流行</option>
-                                        <option value="Rap">Rap</option>
                                     </select>
                                     <button class="btn btn-primary" onclick="searchSongs()">
                                         <i class="fas fa-search"></i> 搜索
@@ -310,13 +304,6 @@
                                         <button onclick="searchUsers()"><i class="fas fa-search"></i></button>
                                     </div>
                                     <select id="user-activity-filter" class="form-control" style="width: 150px;">
-                                        <option value="">所有活跃度</option>
-                                        <option value="高活跃">高活跃</option>
-                                        <option value="中高活跃">中高活跃</option>
-                                        <option value="普通用户">普通用户</option>
-                                        <option value="中低活跃">中低活跃</option>
-                                        <option value="低活跃">低活跃</option>
-                                        <option value="新用户">新用户</option>
                                     </select>
                                     <button class="btn btn-primary" onclick="searchUsers()">
                                         <i class="fas fa-search"></i> 搜索
@@ -574,6 +561,55 @@
                                         <option value="profile">基于画像个性化</option>
                                         <option value="mixed">混合策略</option>
                                     </select>
+                                </div>
+                                <!-- 默认推荐算法 -->
+                                <div class="config-item">
+                                    <div class="config-info">
+                                        <h4>默认推荐算法</h4>
+                                        <p>用户未指定时的默认算法</p>
+                                    </div>
+                                    <select class="form-control" id="default-algorithm" style="width: 200px;">
+                                        <option value="hybrid">混合推荐 (Hybrid)</option>
+                                        <option value="cf">协同过滤 (CF)</option>
+                                        <option value="content">内容推荐 (Content)</option>
+                                        <option value="usercf">用户协同过滤 (UserCF)</option>
+                                        <option value="mf">矩阵分解 (MF)</option>
+                                    </select>
+                                </div>
+
+                                <!-- 最大推荐数量 -->
+                                <div class="config-item">
+                                    <div class="config-info">
+                                        <h4>最大推荐数量</h4>
+                                        <p>单次推荐最多返回的歌曲数</p>
+                                    </div>
+                                    <input type="number" class="form-control" id="max-recommend-count" min="10" max="100" value="50" style="width: 150px;">
+                                </div>
+
+                                <!-- 个性化阈值 -->
+                                <div class="config-item">
+                                    <div class="config-info">
+                                        <h4>个性化阈值</h4>
+                                        <p>用户听歌数量达到此值才启用个性化推荐</p>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 1rem;">
+                                        <input type="range" class="weight-slider" id="min-songs-threshold" min="5" max="50" value="10" style="width: 200px;" 
+                                            oninput="document.getElementById('min-songs-value').textContent = this.value + '首'">
+                                        <span id="min-songs-value" class="weight-value">10首</span>
+                                    </div>
+                                </div>
+
+                                <!-- 内容相似度阈值 -->
+                                <div class="config-item">
+                                    <div class="config-info">
+                                        <h4>内容相似度阈值</h4>
+                                        <p>内容推荐时相似度低于此值的不推荐</p>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 1rem;">
+                                        <input type="range" class="weight-slider" id="similarity-threshold" min="0" max="1" step="0.05" value="0.6" style="width: 200px;" 
+                                            oninput="document.getElementById('similarity-value').textContent = this.value">
+                                        <span id="similarity-value" class="weight-value">0.6</span>
+                                    </div>
                                 </div>
                             </div>
 

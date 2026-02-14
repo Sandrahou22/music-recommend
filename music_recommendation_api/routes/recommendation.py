@@ -1,10 +1,46 @@
 from flask import Blueprint, request, current_app, g
 from typing import Optional
-from sqlalchemy import text  # 添加这行
+from sqlalchemy import text
 from config import Config
 import time
 import logging
-from datetime import datetime, timedelta  # 添加这一行
+from datetime import datetime, timedelta
+
+def record_behavior_sync(user_id, song_id, behavior_type, weight=1.0):
+    """同步记录行为（内部使用）"""
+    try:
+        engine = recommender_service._engine
+        with engine.begin() as conn:
+            # 确保用户存在（如果不存在则创建）
+            user = conn.execute(
+                text("SELECT 1 FROM enhanced_user_features WHERE user_id = :uid"),
+                {"uid": user_id}
+            ).fetchone()
+            if not user:
+                conn.execute(text("""
+                    INSERT INTO enhanced_user_features 
+                    (user_id, nickname, source, activity_level, created_at, updated_at)
+                    VALUES (:uid, :nickname, 'behavior', '新用户', GETDATE(), GETDATE())
+                """), {
+                    "uid": user_id,
+                    "nickname": f"User_{user_id}"
+                })
+            
+            # 插入行为记录
+            conn.execute(text("""
+                INSERT INTO user_song_interaction 
+                (user_id, song_id, behavior_type, [weight], [timestamp])
+                VALUES (:uid, :sid, :type, :weight, GETDATE())
+            """), {
+                "uid": user_id,
+                "sid": song_id,
+                "type": behavior_type,
+                "weight": weight
+            })
+        return True
+    except Exception as e:
+        logger.error(f"记录行为失败: {e}")
+        return False
 
 def save_recommendations_sync(user_id, recommendations):
     """同步保存推荐结果（替换原来的异步函数）"""
@@ -94,7 +130,7 @@ def get_recommendations(user_id: str):
             algorithm=algorithm
         )
 
-        # 【修改】删除原有的 save_recommendations_async 调用，直接调用保存函数
+        # 保存推荐结果到数据库
         try:
             recommendations_to_save = []
             for i, rec in enumerate(recs):
@@ -105,7 +141,6 @@ def get_recommendations(user_id: str):
                     "rank_position": i + 1
                 })
             
-            # 【修复】直接调用同步保存函数
             save_recommendations_sync(user_id, recommendations_to_save)
             
         except Exception as save_err:
@@ -124,6 +159,12 @@ def get_recommendations(user_id: str):
             f"[{g.request_id}] 推荐生成成功 | user={user_id}, "
             f"n={len(recs)}, cold={is_cold}, time={elapsed:.3f}s"
         )
+
+        # 记录推荐生成行为
+        try:
+            record_behavior_sync(user_id, 'recommend_generate', 'generate_recommend', weight=len(recs))
+        except Exception as behavior_err:
+            logger.warning(f"记录推荐生成行为失败: {behavior_err}")
         
         return success({
             "user_id": user_id,
@@ -302,16 +343,14 @@ def record_feedback():
         current_app.logger.error(f"记录反馈异常: {e}")
         return error(message=str(e), code=500)
 
+# ==================== 关键修改点 ====================
+# 原函数使用了不存在的 feedback 和 feedback_at 字段，现已适配现有 recommendations 表
 @bp.route('/recommendations/feedback', methods=['POST'])
 def submit_recommendation_feedback():
     """
     提交推荐反馈（显式反馈）
-    Body: {
-        "user_id": "xxx",
-        "song_id": "xxx",
-        "feedback": "like|dislike|neutral",
-        "algorithm": "hybrid"
-    }
+    由于数据库 recommendations 表没有 feedback 字段，该接口仅支持记录 like 反馈（设置 is_clicked=1）
+    其他反馈类型将被忽略
     """
     try:
         data = request.get_json()
@@ -323,96 +362,128 @@ def submit_recommendation_feedback():
         if not all([user_id, song_id, feedback]):
             return error(message="缺少必要参数", code=400)
         
-        # 记录到数据库（可以新建表或扩展recommendations表）
         engine = recommender_service._engine
-        query = """
-        UPDATE recommendations 
-        SET feedback = :feedback, 
-            feedback_at = GETDATE()
-        WHERE user_id = :user_id 
-        AND song_id = :song_id
-        AND CAST(created_at AS DATE) = CAST(GETDATE() AS DATE)
-        """
         
-        with engine.begin() as conn:
-            result = conn.execute(text(query), {
-                "user_id": user_id,
-                "song_id": song_id,
-                "feedback": feedback
-            })
+        # 只处理 like 反馈
+        if feedback == 'like':
+            # 更新当天的推荐记录，设置 is_clicked = 1
+            update_query = """
+            UPDATE recommendations 
+            SET is_clicked = 1
+            WHERE user_id = :user_id 
+            AND song_id = :song_id
+            AND CAST(created_at AS DATE) = CAST(GETDATE() AS DATE)
+            """
             
-            # 如果没有更新到（可能不是今天的推荐），插入新记录
-            if result.rowcount == 0:
-                insert_query = """
-                INSERT INTO recommendations 
-                (user_id, song_id, algorithm_type, feedback, created_at)
-                VALUES 
-                (:user_id, :song_id, :algorithm, :feedback, GETDATE())
-                """
-                conn.execute(text(insert_query), {
+            with engine.begin() as conn:
+                result = conn.execute(text(update_query), {
                     "user_id": user_id,
-                    "song_id": song_id,
-                    "algorithm": algorithm,
-                    "feedback": feedback
+                    "song_id": song_id
                 })
-        
-        return success(message="反馈已记录")
-        
+                
+                if result.rowcount == 0:
+                    # 如果没有当天的推荐记录，可以返回错误或忽略
+                    logger.warning(f"未找到当天的推荐记录: user={user_id}, song={song_id}")
+                    return error(message="未找到当天的推荐记录，无法记录反馈", code=404)
+                
+                logger.info(f"推荐反馈记录成功: user={user_id}, song={song_id}, feedback=like")
+                return success(message="反馈已记录")
+        else:
+            # dislike 或 neutral 暂不支持，记录日志但返回成功
+            logger.info(f"推荐反馈忽略 (不支持的类型): user={user_id}, song={song_id}, feedback={feedback}")
+            return success(message="反馈已记录（忽略）")
+            
     except Exception as e:
-        logger.error(f"记录反馈失败: {e}")
+        logger.error(f"记录推荐反馈失败: {e}")
         return error(message=str(e), code=500)
 
-# recommendation.py 中的 record_behavior 函数修正
+# ==================== 其他函数保持不变 ====================
+
 @bp.route('/behavior', methods=['POST'])
 def record_behavior():
-    """
-    记录用户行为
-    """
     try:
         data = request.get_json()
         if not data:
             return error(message="请求体不能为空", code=400)
         
-        # 验证必填字段
         required = ['user_id', 'song_id', 'behavior_type']
-        missing = [f for f in required if f not in data]
-        if missing:
-            return error(message=f"缺少必填字段: {', '.join(missing)}", code=400)
+        if not all(k in data for k in required):
+            return error(message=f"缺少必填字段: {', '.join(required)}", code=400)
         
-        # 验证 behavior_type
-        valid_behaviors = ['play', 'like', 'collect', 'skip']
+        valid_behaviors = ['play', 'like', 'collect', 'skip', 'comment', 'generate_recommend']
         if data['behavior_type'] not in valid_behaviors:
             return error(message=f"无效行为类型，支持: {', '.join(valid_behaviors)}", code=400)
         
         engine = recommender_service._engine
-        query = """
-        INSERT INTO user_song_interaction 
-        (user_id, song_id, behavior_type, [weight], [timestamp])
-        VALUES 
-        (:user_id, :song_id, :behavior_type, :weight, :timestamp)
-        """
         
-        weight = data.get('weight', 1.0)
-        
-        # 【关键修改】使用 engine.begin()
         with engine.begin() as conn:
-            conn.execute(text(query), {
-                "user_id": data['user_id'],
-                "song_id": data['song_id'],
-                "behavior_type": data['behavior_type'],
-                "weight": weight,
-                "timestamp": data.get('timestamp', datetime.now())
+            # 1. 确保用户存在（自动创建）
+            user = conn.execute(
+                text("SELECT 1 FROM enhanced_user_features WHERE user_id = :uid"),
+                {"uid": data['user_id']}
+            ).fetchone()
+            if not user:
+                conn.execute(text("""
+                    INSERT INTO enhanced_user_features 
+                    (user_id, nickname, source, activity_level, created_at, updated_at)
+                    VALUES (:uid, :nickname, 'behavior', '新用户', GETDATE(), GETDATE())
+                """), {
+                    "uid": data['user_id'],
+                    "nickname": f"User_{data['user_id']}"
+                })
+                logger.info(f"自动创建用户: {data['user_id']}")
+            
+            # 2. 检查歌曲是否存在（所有 song_id 都必须存在）
+            song = conn.execute(
+                text("SELECT 1 FROM enhanced_song_features WHERE song_id = :sid"),
+                {"sid": data['song_id']}
+            ).fetchone()
+            if not song:
+                return error(message=f"歌曲 {data['song_id']} 不存在", code=400)
+            
+            # 3. 插入行为记录
+            conn.execute(text("""
+                INSERT INTO user_song_interaction 
+                (user_id, song_id, behavior_type, [weight], [timestamp])
+                VALUES (:uid, :sid, :type, :weight, GETDATE())
+            """), {
+                "uid": data['user_id'],
+                "sid": data['song_id'],
+                "type": data['behavior_type'],
+                "weight": data.get('weight', 1.0)
             })
+            
+            # 4. 更新用户统计（仅针对真实歌曲，但这里我们允许所有插入）
+            # 判断该用户是否听过这首歌（不包括本次插入）
+            played_before = conn.execute(text("""
+                SELECT 1 FROM user_song_interaction 
+                WHERE user_id = :uid AND song_id = :sid AND behavior_type = 'play'
+                AND interaction_id != SCOPE_IDENTITY()
+            """), {"uid": data['user_id'], "sid": data['song_id']}).fetchone()
+
+            if not played_before:
+                # 如果是新歌，unique_songs +1
+                conn.execute(text("""
+                    UPDATE enhanced_user_features 
+                    SET unique_songs = ISNULL(unique_songs, 0) + 1,
+                        total_interactions = ISNULL(total_interactions, 0) + 1,
+                        updated_at = GETDATE()
+                    WHERE user_id = :uid
+                """), {"uid": data['user_id']})
+            else:
+                # 如果听过，只增加 total_interactions
+                conn.execute(text("""
+                    UPDATE enhanced_user_features 
+                    SET total_interactions = ISNULL(total_interactions, 0) + 1,
+                        updated_at = GETDATE()
+                    WHERE user_id = :uid
+                """), {"uid": data['user_id']})
         
-        current_app.logger.info(
-            f"行为记录成功 | user={data['user_id']}, "
-            f"song={data['song_id']}, behavior={data['behavior_type']}"
-        )
-        
+        logger.info(f"行为记录成功: user={data['user_id']}, song={data['song_id']}, type={data['behavior_type']}")
         return success(message="行为记录成功")
         
     except Exception as e:
-        current_app.logger.error(f"记录行为失败: {e}")
+        logger.error(f"记录行为失败: {e}", exc_info=True)
         return error(message=str(e), code=500)
     
 @bp.route('/recommendations/status', methods=['POST'])
@@ -439,7 +510,6 @@ def update_recommendation_status():
         ORDER BY created_at DESC
         """
         
-        # 【关键修改】使用 engine.begin()
         with engine.begin() as conn:
             result = conn.execute(text(find_query), {
                 "user_id": user_id,
@@ -483,7 +553,7 @@ def save_recommendations():
         
         engine = recommender_service._engine
         
-        # 【关键修复】先检查用户是否存在，不存在则创建临时用户记录
+        # 先检查用户是否存在，不存在则创建临时用户记录
         check_user_query = "SELECT 1 FROM enhanced_user_features WHERE user_id = :user_id"
         
         with engine.connect() as conn:

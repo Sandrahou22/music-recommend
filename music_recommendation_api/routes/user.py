@@ -211,3 +211,117 @@ def register_user():
         import traceback
         logger.error(traceback.format_exc())
         return error(message=str(e), code=500)
+
+@bp.route('/<user_id>/recent-activities', methods=['GET'])
+def get_recent_activities(user_id):
+    """获取用户近期活动（播放、评论、点赞、推荐生成等）"""
+    try:
+        limit = min(request.args.get('limit', 20, type=int), 50)
+        engine = recommender_service._engine
+        
+        # 联合查询播放、歌曲喜欢、评论、点赞评论、推荐生成
+        query = text("""
+            -- 播放行为
+            SELECT 
+                'play' as activity_type,
+                i.song_id,
+                NULL as comment_id,
+                NULL as content,
+                i.[timestamp] as activity_time,
+                s.song_name,
+                s.artists,
+                NULL as extra_data
+            FROM user_song_interaction i
+            LEFT JOIN enhanced_song_features s ON i.song_id = s.song_id
+            WHERE i.user_id = :user_id AND i.behavior_type = 'play'
+            
+            UNION ALL
+            
+            -- 歌曲喜欢
+            SELECT 
+                'like_song' as activity_type,
+                i.song_id,
+                NULL as comment_id,
+                NULL as content,
+                i.[timestamp] as activity_time,
+                s.song_name,
+                s.artists,
+                NULL as extra_data
+            FROM user_song_interaction i
+            LEFT JOIN enhanced_song_features s ON i.song_id = s.song_id
+            WHERE i.user_id = :user_id AND i.behavior_type = 'like'
+            
+            UNION ALL
+            
+            -- 评论
+            SELECT 
+                'comment' as activity_type,
+                c.unified_song_id as song_id,
+                c.comment_id,
+                c.content,
+                c.created_at as activity_time,
+                s.song_name,
+                s.artists,
+                NULL as extra_data
+            FROM song_comments c
+            LEFT JOIN enhanced_song_features s ON c.unified_song_id = s.song_id
+            WHERE c.original_user_id = :user_id
+            
+            UNION ALL
+            
+            -- 点赞评论
+            SELECT 
+                'like_comment' as activity_type,
+                sc.unified_song_id as song_id,
+                cl.comment_id,
+                sc.content as content,
+                cl.created_at as activity_time,
+                s.song_name,
+                s.artists,
+                NULL as extra_data
+            FROM comment_likes cl
+            JOIN song_comments sc ON cl.comment_id = sc.comment_id
+            LEFT JOIN enhanced_song_features s ON sc.unified_song_id = s.song_id
+            WHERE cl.user_id = :user_id
+            
+            UNION ALL
+            
+            -- 推荐生成（聚合计数）
+            SELECT 
+                'generate_recommend' as activity_type,
+                NULL as song_id,
+                NULL as comment_id,
+                NULL as content,
+                i.[timestamp] as activity_time,
+                NULL as song_name,
+                NULL as artists,
+                i.weight as extra_data
+            FROM user_song_interaction i
+            WHERE i.user_id = :user_id AND i.behavior_type = 'generate_recommend'
+            
+            ORDER BY activity_time DESC
+            OFFSET 0 ROWS
+            FETCH NEXT :limit ROWS ONLY
+        """)
+        
+        with engine.connect() as conn:
+            result = conn.execute(query, {"user_id": user_id, "limit": limit})
+            activities = []
+            for row in result:
+                activities.append({
+                    "type": row.activity_type,
+                    "song_id": row.song_id,
+                    "song_name": row.song_name,
+                    "artists": row.artists,
+                    "comment_id": row.comment_id,
+                    "content": row.content,
+                    "timestamp": row.activity_time.isoformat() if row.activity_time else None,
+                    "extra_data": row.extra_data
+                })
+        
+        logger.info(f"获取用户 {user_id} 活动记录 {len(activities)} 条")
+        return success(activities)
+        
+    except Exception as e:
+        logger.error(f"获取用户活动失败: {e}")
+        return error(message=str(e), code=500)
