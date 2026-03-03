@@ -4,6 +4,7 @@ from sqlalchemy import text  # 添加这行
 from recommender_service import recommender_service
 import logging
 logger = logging.getLogger(__name__)
+import os
 
 bp = Blueprint('user', __name__)
 
@@ -15,8 +16,8 @@ def get_user_profile(user_id):
         logger.info(f"获取用户画像 | user={user_id}")
         
         # 先从推荐服务获取（内存缓存）
-        profile = recommender_service.get_user_profile(user_id)
         
+        profile = recommender_service.get_user_profile(user_id)
         if profile:
             logger.info(f"命中内存缓存 | user={user_id}")
             return success({
@@ -27,7 +28,8 @@ def get_user_profile(user_id):
                 "avg_popularity": float(profile.get('avg_popularity', 50)),
                 "activity_level": profile.get('activity_level', '普通用户'),
                 "diversity_ratio": float(profile.get('diversity_ratio', 0.5) if profile.get('diversity_ratio') else 0.5),
-                "is_cold_start": profile.get('is_cold_start', False)
+                "is_cold_start": profile.get('is_cold_start', False),
+                "avatar_path": profile.get('avatar_path')   # 关键字段
             })
         
         # 如果内存中没有，从数据库查
@@ -36,20 +38,21 @@ def get_user_profile(user_id):
         
         # 确保SQL字段名与数据库表结构完全匹配
         query = """
-        SELECT 
-            user_id,
-            nickname,
-            ISNULL(unique_songs, 0) as n_songs,
-            ISNULL(total_interactions, 0) as total_interactions,
-            ISNULL(avg_popularity_pref, 50) as avg_popularity,
-            ISNULL(top_genre_1, '') as top_genre_1,
-            ISNULL(top_genre_2, '') as top_genre_2,
-            ISNULL(top_genre_3, '') as top_genre_3,
-            ISNULL(activity_level, '普通用户') as activity_level,
-            ISNULL(diversity_ratio, 0.5) as diversity_ratio
-        FROM enhanced_user_features 
-        WHERE user_id = :user_id
-        """
+            SELECT 
+                user_id,
+                nickname,
+                ISNULL(unique_songs, 0) as n_songs,
+                ISNULL(total_interactions, 0) as total_interactions,
+                ISNULL(avg_popularity_pref, 50) as avg_popularity,
+                ISNULL(top_genre_1, '') as top_genre_1,
+                ISNULL(top_genre_2, '') as top_genre_2,
+                ISNULL(top_genre_3, '') as top_genre_3,
+                ISNULL(activity_level, '普通用户') as activity_level,
+                ISNULL(diversity_ratio, 0.5) as diversity_ratio,
+                avatar_path   -- 添加这一行
+            FROM enhanced_user_features 
+            WHERE user_id = :user_id
+            """
         
         # 【关键修复】使用正确的连接方式
         with engine.connect() as conn:
@@ -74,7 +77,8 @@ def get_user_profile(user_id):
                     "top_genres": genres,
                     "activity_level": str(result.activity_level) if result.activity_level else '普通用户',
                     "diversity_ratio": diversity_ratio,
-                    "is_cold_start": n_songs < 5
+                    "is_cold_start": n_songs < 5,
+                    "avatar_path": f'http://127.0.0.1:5000/static/avatars/{os.path.basename(result.avatar_path)}' if result.avatar_path else None  # 添加这一行
                 })
             else:
                 logger.warning(f"用户不存在 | user={user_id}")

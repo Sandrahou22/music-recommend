@@ -1122,20 +1122,16 @@ async function updateRecommendationStatus(songId, action) {
 // script.js 中 displayRecommendations 函数修改
 function displayRecommendations(recommendations) {
     const container = document.getElementById('recommendations-container');
-    
     if (!recommendations || recommendations.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <i class="fas fa-music"></i>
-                <p>没有找到推荐结果</p>
-            </div>
-        `;
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-music"></i><p>没有找到推荐结果</p></div>`;
         return;
     }
     
     container.innerHTML = recommendations.map((song, index) => {
-        // 【关键修复】使用原始has_audio状态，但提供一个后备值
-        const hasAudio = song.has_audio !== false; // 默认true，除非明确为false
+        const hasAudio = song.has_audio !== false;
+        const coverHtml = song.cover_path 
+            ? `<img src="${song.cover_path}" alt="cover" class="song-cover" style="width:40px;height:40px;object-fit:cover;border-radius:4px;">` 
+            : `<i class="fas fa-music"></i>`;
         
         const playButton = hasAudio ? `
             <button class="action-btn play-song-btn">
@@ -1152,13 +1148,12 @@ function displayRecommendations(recommendations) {
             '<span class="audio-badge" title="可播放"><i class="fas fa-volume-up"></i></span>' : 
             '<span class="no-audio-badge">预览</span>';
         
-        // 【重要】在data属性中保存原始状态
         return `
         <div class="song-card ${!hasAudio ? 'no-audio' : ''}" 
              data-song-id="${song.song_id}" 
              data-has-audio="${hasAudio}">
             <div class="song-card-header">
-                <i class="fas fa-music"></i>
+                ${coverHtml}
                 <span>推荐 #${index + 1}</span>
                 ${song.cold_start ? '<span class="cold-badge">冷启动</span>' : ''}
                 ${audioBadge}
@@ -1187,13 +1182,8 @@ function displayRecommendations(recommendations) {
                 </div>
             </div>
         </div>
-    `}).join('');
-    
-    // 【修复】只添加有音频的歌曲到播放列表
-    playerPlaylist = recommendations
-        .filter(song => song.has_audio !== false) // 只包含有音频的
-        .map(r => r.song_id);
-    playerCurrentIndex = -1;
+        `;
+    }).join('');
 }
 
 async function submitFeedback(songId, feedback, algorithm) {
@@ -1680,6 +1670,34 @@ function displayUserProfile(profile) {
             popPrefEl.innerHTML += ' <span class="cold-badge">新用户</span>';
         }
     }
+
+    // 更新“我的”页面头像
+    const myAvatarImg = document.getElementById('profile-avatar-img');
+    const myAvatarIcon = document.getElementById('profile-avatar-icon');
+    if (profile.avatar_path) {
+        if (myAvatarImg) {
+            myAvatarImg.src = profile.avatar_path;
+            myAvatarImg.style.display = 'inline-block';
+        }
+        if (myAvatarIcon) myAvatarIcon.style.display = 'none';
+    } else {
+        if (myAvatarImg) myAvatarImg.style.display = 'none';
+        if (myAvatarIcon) myAvatarIcon.style.display = 'inline-block';
+    }
+
+    // 更新推荐页面用户画像头像
+    const recommendAvatarImg = document.getElementById('recommend-profile-avatar-img');
+    const recommendAvatarIcon = document.getElementById('recommend-profile-avatar-icon');
+    if (profile.avatar_path) {
+        if (recommendAvatarImg) {
+            recommendAvatarImg.src = profile.avatar_path;
+            recommendAvatarImg.style.display = 'inline-block';
+        }
+        if (recommendAvatarIcon) recommendAvatarIcon.style.display = 'none';
+    } else {
+        if (recommendAvatarImg) recommendAvatarImg.style.display = 'none';
+        if (recommendAvatarIcon) recommendAvatarIcon.style.display = 'inline-block';
+    }
     
     console.log('用户画像显示完成');
 }
@@ -1690,35 +1708,20 @@ function displayUserProfile(profile) {
 
 async function playSong(songId) {
     console.log(`[播放调试] 开始播放歌曲: ${songId}`);
-    
-    // 【关键】先检查歌曲卡片状态
-    const songCard = document.querySelector(`[data-song-id="${songId}"]`);
-    if (!songCard) {
-        console.log('[播放调试] 未找到歌曲卡片');
-        return;
-    }
-    
-    // 【关键】检查是否有音频（从data属性读取，不可修改）
-    const hasAudio = songCard.dataset.hasAudio === "true";
-    if (!hasAudio) {
-        showNotification('该歌曲暂无音频文件，仅可预览', 'warning');
-        return;
-    }
-    
+    let timeoutId;
+
     // 防抖：如果正在请求同一首歌曲，避免重复
     if (window.currentPlayingRequest && window.currentPlayingRequest === songId) {
         console.log(`[播放调试] 正在处理同一首歌曲的请求，跳过`);
         return;
     }
-    
     window.currentPlayingRequest = songId;
-    
-    // 清理旧播放器（如果存在）
+
+    // 清理旧播放器
     if (audioPlayer) {
         try {
             audioPlayer.pause();
             audioPlayer.src = '';
-            // 清除所有旧事件
             audioPlayer.oncanplay = null;
             audioPlayer.onended = null;
             audioPlayer.onerror = null;
@@ -1728,65 +1731,86 @@ async function playSong(songId) {
             console.warn('[播放调试] 清理旧播放器失败:', e);
         }
     }
-    
-    // 创建全新的音频实例
+
+    // 创建新播放器
     audioPlayer = new Audio();
     audioPlayer.preload = 'auto';
     audioPlayer.crossOrigin = "anonymous";
-    
+
     const audioUrl = `${API_BASE_URL}/songs/${songId}/audio`;
     console.log(`[播放调试] 音频URL: ${audioUrl}`);
     audioPlayer.src = audioUrl;
     currentPlayingSongId = songId;
-    
-    // 获取歌曲信息
-    let song = currentRecommendations.find(s => s.song_id === songId) || 
+
+    // 定义更新播放器UI的函数
+    function updatePlayerUI(song) {
+        if (song) {
+            document.getElementById('now-playing-title').textContent = song.song_name || '未知歌曲';
+            document.getElementById('now-playing-artist').textContent = song.artists || '未知艺术家';
+            const albumArt = document.querySelector('.album-art');
+            if (albumArt) {
+                if (song.cover_path) {
+                    albumArt.innerHTML = `<img src="${song.cover_path}" alt="cover" style="width:100%;height:100%;object-fit:cover;">`;
+                } else {
+                    albumArt.innerHTML = '<i class="fas fa-music"></i>';
+                }
+            }
+        }
+    }
+
+    // 查找歌曲信息（先从已有数据中查找）
+    let song = currentRecommendations.find(s => s.song_id === songId) ||
                currentHotSongs.find(s => s.song_id === songId) ||
                (window.tempSongStore && window.tempSongStore[songId]);
-    
+
     if (!song) {
         try {
+            // 如果没有，从后端获取
             const response = await fetch(`${API_BASE_URL}/songs/${songId}`);
             const data = await response.json();
-            if (data.success) song = data.data;
-        } catch(e) {
+            if (data.success) {
+                song = data.data;
+                // 缓存到临时存储，避免重复请求
+                if (!window.tempSongStore) window.tempSongStore = {};
+                window.tempSongStore[songId] = song;
+            }
+        } catch (e) {
             console.warn('[播放调试] 获取歌曲详情失败', e);
         }
     }
-    
-    // 更新UI显示
+
+    // 如果已有歌曲信息，立即更新UI
     if (song) {
-        document.getElementById('now-playing-title').textContent = song.song_name || '未知歌曲';
-        document.getElementById('now-playing-artist').textContent = song.artists || '未知艺术家';
+        updatePlayerUI(song);
+    } else {
+        // 没有任何信息时显示默认值
+        document.getElementById('now-playing-title').textContent = '未知歌曲';
+        document.getElementById('now-playing-artist').textContent = '未知艺术家';
+        document.querySelector('.album-art').innerHTML = '<i class="fas fa-music"></i>';
     }
-    
+
     // 设置超时计时器
-    const timeoutId = setTimeout(() => {
+    timeoutId = setTimeout(() => {
         console.warn('[播放调试] 音频加载超时');
-        if (audioPlayer.readyState === 0) { // HAVE_NOTHING
-            showNotification('音频加载超时，可能文件不存在或网络问题', 'error');
-            // 尝试下一首
-            setTimeout(() => playNext(), 2000);
-        }
-    }, 10000); // 10秒超时
-    
-    // 【优化】简化事件监听器
+    }, 10000);
+
+    // 事件监听器
     audioPlayer.addEventListener('canplay', () => {
         clearTimeout(timeoutId);
         console.log(`[播放调试] 音频可以播放: ${songId}`);
     }, { once: true });
-    
+
     audioPlayer.addEventListener('canplaythrough', () => {
         console.log(`[播放调试] 音频已完全加载: ${songId}`);
     }, { once: true });
-    
+
     audioPlayer.addEventListener('loadedmetadata', () => {
         console.log(`[播放调试] 音频元数据加载: 时长 ${audioPlayer.duration}秒`);
         if (audioPlayer.duration && audioPlayer.duration !== Infinity) {
             document.getElementById('total-time').textContent = formatTime(Math.floor(audioPlayer.duration));
         }
     });
-    
+
     audioPlayer.addEventListener('timeupdate', () => {
         if (!isDraggingProgress && audioPlayer.duration) {
             const progress = (audioPlayer.currentTime / audioPlayer.duration) * 100;
@@ -1794,7 +1818,7 @@ async function playSong(songId) {
             document.getElementById('current-time').textContent = formatTime(Math.floor(audioPlayer.currentTime));
         }
     });
-    
+
     audioPlayer.addEventListener('ended', () => {
         console.log(`[播放调试] 音频播放结束: ${songId}`);
         isPlaying = false;
@@ -1802,102 +1826,73 @@ async function playSong(songId) {
         playNext();
         window.currentPlayingRequest = null;
     }, { once: true });
-    
-    // 【关键修复】优化错误处理 - 完全不修改UI状态
+
     audioPlayer.addEventListener('error', (e) => {
         clearTimeout(timeoutId);
         console.error('[播放调试] 音频播放错误:', e);
-        
         let msg = '音频加载失败';
         if (audioPlayer.error) {
             switch(audioPlayer.error.code) {
-                case 1: // MEDIA_ERR_ABORTED
-                    msg = '音频加载被中止';
-                    break;
-                case 2: // MEDIA_ERR_NETWORK
-                    msg = '网络错误，无法加载音频';
-                    break;
-                case 3: // MEDIA_ERR_DECODE
-                    msg = '音频解码错误';
-                    break;
-                case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
-                    msg = '音频文件不存在或格式不支持';
-                    break;
+                case 1: msg = '音频加载被中止'; break;
+                case 2: msg = '网络错误，无法加载音频'; break;
+                case 3: msg = '音频解码错误'; break;
+                case 4: msg = '音频文件不存在'; break;
             }
         }
-        
         showNotification(msg, 'error');
-        
         isPlaying = false;
         updatePlayButton();
         window.currentPlayingRequest = null;
-        
-        // 【核心修复】不修改任何UI状态，只显示通知
-        // 原来的代码会修改 song.has_audio 和卡片样式，现在完全删除
-        
     }, { once: true });
-    
+
     // 开始播放
     try {
         console.log(`[播放调试] 开始加载音频...`);
-        
-        // 使用Promise包装，避免回调地狱
         const playPromise = new Promise((resolve, reject) => {
             const loadTimeout = setTimeout(() => {
                 reject(new Error('音频加载超时'));
             }, 8000);
-            
             const canPlayHandler = () => {
                 clearTimeout(loadTimeout);
                 resolve();
             };
-            
             const errorHandler = (e) => {
                 clearTimeout(loadTimeout);
                 reject(e);
             };
-            
             audioPlayer.addEventListener('canplay', canPlayHandler, { once: true });
             audioPlayer.addEventListener('error', errorHandler, { once: true });
         });
-        
+
         await playPromise;
-        
         console.log(`[播放调试] 音频可以播放，开始播放...`);
         await audioPlayer.play();
         isPlaying = true;
         updatePlayButton();
-        
-        // 添加到播放列表（如果不在其中）
+
+        // 添加到播放列表
         if (!playerPlaylist.includes(songId)) {
             playerPlaylist.push(songId);
             playerCurrentIndex = playerPlaylist.length - 1;
         } else {
             playerCurrentIndex = playerPlaylist.indexOf(songId);
         }
-        
+
         // 记录播放行为
         recordBehavior(songId, 'play', 0.5);
-        
         console.log(`[播放调试] 播放成功: ${songId}`);
         showNotification('开始播放', 'success');
-        
+
     } catch (error) {
         console.error('[播放调试] 播放失败:', error);
         isPlaying = false;
         updatePlayButton();
         window.currentPlayingRequest = null;
-        
-        // 更友好的错误提示
         let userMsg = '播放失败';
         if (error.message && error.message.includes('超时')) {
             userMsg = '音频加载超时，可能服务器忙或文件不存在';
         }
-        
         showNotification(userMsg, 'error');
-        
-        // 【修复】播放失败时不自动下一首，让用户手动选择
-        // 删除自动播放下一首的代码
     }
 }
 
@@ -2150,6 +2145,13 @@ function displaySongDetail(song, explanation = null) {
     document.getElementById('detail-artists').textContent = song.artists || '未知艺术家';
     document.getElementById('detail-genre').textContent = song.genre || '未知流派';
     document.getElementById('detail-popularity').textContent = `流行度: ${song.popularity || 50}`;
+
+    // 在函数内部，获取封面 URL
+    const coverUrl = song.cover_path || null;
+    const albumArtHtml = coverUrl 
+        ? `<img src="${coverUrl}" alt="cover" style="width:100%;height:100%;object-fit:cover;">` 
+        : `<i class="fas fa-music"></i>`;
+    document.querySelector('.detail-album-art').innerHTML = albumArtHtml;
     
     // 提取音频特征：优先使用 audio_features 对象，否则直接从 song 取
     const features = song.audio_features || song;
@@ -2951,21 +2953,20 @@ async function loadExploreContent() {
 
 function displayExploreSongs(songs) {
     const container = document.getElementById('explore-container');
-    
     if (!songs || songs.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <i class="fas fa-music"></i>
-                <p>暂无歌曲</p>
-            </div>
-        `;
+        container.innerHTML = `<div class="empty-state"><i class="fas fa-music"></i><p>暂无歌曲</p></div>`;
         return;
     }
     
-    container.innerHTML = songs.map(song => `
+    container.innerHTML = songs.map(song => {
+        const coverHtml = song.cover_path 
+            ? `<img src="${song.cover_path}" alt="cover" class="song-cover" style="width:40px;height:40px;object-fit:cover;border-radius:4px;">` 
+            : `<i class="fas fa-compact-disc"></i>`;
+        
+        return `
         <div class="song-card explore-card" data-song-id="${song.song_id}" data-has-audio="${song.has_audio !== false}">
             <div class="song-card-header" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
-                <i class="fas fa-compact-disc"></i>
+                ${coverHtml}
                 <span>发现</span>
             </div>
             <div class="song-card-body">
@@ -2985,7 +2986,8 @@ function displayExploreSongs(songs) {
                 </div>
             </div>
         </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 async function updateStats() {

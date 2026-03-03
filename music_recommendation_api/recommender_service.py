@@ -345,6 +345,7 @@ class RecommenderService:
 
         song_ids = [str(sid) for sid, _ in recs]
         audio_status_map = self._get_audio_status_batch(song_ids)
+        cover_map = self._get_cover_path_batch(song_ids)   # 新增
 
         for song_id, score in recs:
             try:
@@ -352,6 +353,7 @@ class RecommenderService:
                 if info:
                     song_id_str = str(song_id)
                     has_audio = audio_status_map.get(song_id_str, False)
+                    cover_path = cover_map.get(song_id_str)   # 新增
                     results.append({
                         'song_id': song_id_str,
                         'score': round(float(score), 4),
@@ -361,6 +363,7 @@ class RecommenderService:
                         'popularity': int(info.get('popularity', 50)),
                         'cold_start': is_cold,
                         'has_audio': has_audio,
+                        'cover_path': cover_path,   # 新增
                         'source': info.get('source', 'unknown'),
                         'timestamp': datetime.now().isoformat()
                     })
@@ -420,15 +423,34 @@ class RecommenderService:
         return self.get_user_profile(user_id)
 
     def get_user_profile(self, user_id: str) -> Optional[Dict]:
-        """获取用户画像"""
+        """获取用户画像（包含头像路径）"""
         self._check_initialized()
         user_id_str = str(user_id)
         user_type = self._recommender.get_user_type(user_id_str)
         recommender = (self._recommender.internal_recommender
-                       if user_type == 'internal' else self._recommender.external_recommender)
+                    if user_type == 'internal' else self._recommender.external_recommender)
         profile = recommender.get_user_profile(user_id_str)
         if profile:
             profile['is_cold_start'] = user_id_str not in self._valid_users
+
+            # ===== 新增：从数据库补充 avatar_path =====
+            try:
+                if self._engine:
+                    query = text("SELECT avatar_path FROM enhanced_user_features WHERE user_id = :uid")
+                    with self._engine.connect() as conn:
+                        row = conn.execute(query, {"uid": user_id_str}).fetchone()
+                        if row and row.avatar_path:
+                            import os
+                            filename = os.path.basename(row.avatar_path)
+                            # 替换为您的实际域名和端口
+                            profile['avatar_path'] = f'http://127.0.0.1:5000/static/avatars/{filename}'
+                        else:
+                            profile['avatar_path'] = None
+            except Exception as e:
+                logger.error(f"查询用户头像失败: {e}")
+                profile['avatar_path'] = None
+            # ========================================
+
         return profile
 
     # ------------------------------------------------------------------
@@ -464,6 +486,7 @@ class RecommenderService:
     # ------------------------------------------------------------------
     # 歌曲详情（从数据库补充音频特征）
     # ------------------------------------------------------------------
+    # 在推荐器服务中修改
     def get_song_details(self, song_id: str) -> Optional[Dict]:
         self._check_initialized()
         try:
@@ -481,12 +504,11 @@ class RecommenderService:
                 'retrieved_at': datetime.now().isoformat()
             }
 
-            # 从数据库补充音频特征
             if self._engine:
                 query = text("""
                     SELECT danceability, energy, valence, tempo, loudness,
-                           speechiness, acousticness, instrumentalness, liveness,
-                           final_popularity
+                        speechiness, acousticness, instrumentalness, liveness,
+                        final_popularity, cover_path
                     FROM enhanced_song_features
                     WHERE song_id = :sid
                 """)
@@ -505,6 +527,8 @@ class RecommenderService:
                             'liveness': float(row.liveness or 0.2),
                             'final_popularity': float(row.final_popularity or 50)
                         }
+                        # 添加封面路径
+                        result['cover_path'] = row.cover_path if row.cover_path else None
             return result
         except Exception as e:
             logger.error(f"获取歌曲详情失败 {song_id}: {e}")
@@ -566,6 +590,26 @@ class RecommenderService:
         """清除用户缓存（仅用于兼容旧接口）"""
         self.get_user_profile_cached.cache_clear()
         logger.info(f"清除用户画像缓存 | user={user_id}")
+
+    def _get_cover_path_batch(self, song_ids: List[str]) -> Dict[str, str]:
+        """批量查询歌曲封面路径"""
+        if not song_ids or not self._engine:
+            return {}
+        try:
+            batch_size = 50
+            cover_map = {}
+            for i in range(0, len(song_ids), batch_size):
+                batch = song_ids[i:i + batch_size]
+                placeholders = ', '.join([f"'{sid}'" for sid in batch])
+                query = f"SELECT song_id, cover_path FROM enhanced_song_features WHERE song_id IN ({placeholders})"
+                with self._engine.connect() as conn:
+                    result = conn.execute(text(query))
+                    for row in result:
+                        cover_map[row.song_id] = row.cover_path
+            return cover_map
+        except Exception as e:
+            logger.error(f"批量查询封面路径失败: {e}")
+            return {}
 
 
 # 全局单例

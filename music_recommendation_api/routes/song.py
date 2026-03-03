@@ -61,16 +61,17 @@ def get_hot_songs():
             SELECT TOP {n}
                 song_id, song_name, artists, album, 
                 COALESCE(genre_clean, genre) as genre,
-                COALESCE(final_popularity, popularity, 50) as popularity,  -- 使用真实流行度
+                COALESCE(final_popularity, popularity, 50) as popularity,
                 popularity_tier,
                 audio_path,
+                cover_path,  -- 添加这一行
                 CASE 
                     WHEN audio_path IS NOT NULL AND audio_path != '' THEN 1 
                     ELSE 0 
                 END as has_audio
             FROM enhanced_song_features
             {where_clause}
-            ORDER BY COALESCE(final_popularity, popularity, 50) DESC  -- 按真实流行度排序
+            ORDER BY COALESCE(final_popularity, popularity, 50) DESC
         """)
         
         with engine.connect() as conn:

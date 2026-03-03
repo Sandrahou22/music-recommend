@@ -1599,37 +1599,23 @@ async function initCharts() {
 
 function renderSongsTable() {
     const tbody = document.getElementById('songs-table-body');
-    
     if (!songsData || songsData.length === 0) {
-        tbody.innerHTML = `
-            <tr>
-                <td colspan="6" class="empty-state">
-                    <i class="fas fa-inbox"></i>
-                    <p>暂无歌曲数据</p>
-                </td>
-            </tr>
-        `;
+        tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><i class="fas fa-inbox"></i><p>暂无歌曲数据</p></td></tr>`;
         return;
     }
     
     tbody.innerHTML = songsData.map((song) => {
-        // 获取流行度值，支持多种字段名
-        let popValue = 50; // 默认值
-        
-        if (song.final_popularity !== undefined && song.final_popularity !== null) {
-            popValue = parseFloat(song.final_popularity);
-        } else if (song.popularity !== undefined && song.popularity !== null) {
-            popValue = parseFloat(song.popularity);
-        } else if (song.finalPopularity !== undefined && song.finalPopularity !== null) {
-            popValue = parseFloat(song.finalPopularity);
-        }
-        
-        // 确保是有效数字
+        let popValue = parseFloat(song.final_popularity ?? song.popularity ?? 50);
         if (isNaN(popValue)) popValue = 50;
+        
+        const coverHtml = song.cover_path 
+            ? `<img src="${song.cover_path}" alt="cover" style="width:40px;height:40px;object-fit:cover;border-radius:4px;">` 
+            : `<i class="fas fa-music" style="font-size:24px;color:#ccc;"></i>`;
         
         return `
         <tr>
             <td><strong>${song.song_id || song.id || 'N/A'}</strong></td>
+            <td>${coverHtml}</td>   <!-- 新增列 -->
             <td>
                 <div style="font-weight: 600;">${song.song_name || '未知'}</div>
                 <div style="font-size: 0.85rem; color: var(--text-secondary);">${song.album || '未知专辑'}</div>
@@ -1990,20 +1976,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function renderUsersTable() {
     const tbody = document.getElementById('users-table-body');
-    
     if (!usersData || usersData.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><i class="fas fa-inbox"></i><p>暂无用户数据</p></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" class="empty-state"><i class="fas fa-inbox"></i><p>暂无用户数据</p></td></tr>`;
         return;
     }
     
-    tbody.innerHTML = usersData.map(user => `
+    tbody.innerHTML = usersData.map(user => {
+        // 头像处理：如果有路径则显示图片，否则显示默认图标
+        const avatarHtml = user.avatar_path 
+            ? `<img src="${user.avatar_path}" alt="avatar" style="width:40px;height:40px;border-radius:50%;object-fit:cover;">` 
+            : `<div style="width:40px;height:40px;background:var(--primary-color);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:600;">${(user.nickname || 'U')[0].toUpperCase()}</div>`;
+        
+        return `
         <tr>
             <td><code>${user.user_id}</code></td>
+            <td>${avatarHtml}</td>   <!-- 头像列 -->
             <td>
                 <div style="display: flex; align-items: center; gap: 0.5rem;">
-                    <div style="width: 32px; height: 32px; background: var(--primary-color); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 600;">
-                        ${(user.nickname || 'U')[0].toUpperCase()}
-                    </div>
                     <span style="font-weight: 500;">${user.nickname || '未命名'}</span>
                 </div>
             </td>
@@ -2031,7 +2020,8 @@ function renderUsersTable() {
                 </div>
             </td>
         </tr>
-    `).join('');
+        `;
+    }).join('');
 }
 
 function getActivityLevelClass(level) {

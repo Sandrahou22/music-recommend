@@ -2551,3 +2551,7 @@ body {
         max-height: 300px;
     }
 }
+
+#recommend-profile-avatar-img {
+    margin-bottom: 45px;
+}

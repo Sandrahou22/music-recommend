@@ -6,6 +6,7 @@ import jwt
 import hashlib
 import logging  # 【添加这一行】
 import time
+import os
 
 from config import Config
 from recommender_service import recommender_service
@@ -539,10 +540,11 @@ def get_songs_list():
         query = f"""
         SELECT 
             song_id, song_name, artists, album, genre, 
-            popularity, final_popularity, created_at
+            popularity, final_popularity, created_at,
+            cover_path   -- 添加这一行
         FROM enhanced_song_features
         WHERE {where_clause}
-        ORDER BY {sort_by} {sort_order}  /* 【关键】使用动态排序 */
+        ORDER BY {sort_by} {sort_order}
         OFFSET {offset} ROWS
         FETCH NEXT {per_page} ROWS ONLY
         """
@@ -669,7 +671,8 @@ def get_users_list():
         
         result = conn.execute(text(f"""
             SELECT user_id, nickname, role, activity_level, 
-                   unique_songs, total_interactions, created_at
+                unique_songs, total_interactions, created_at,
+                avatar_path   -- 添加这一行
             FROM enhanced_user_features
             WHERE {where_clause}
             ORDER BY created_at DESC
@@ -680,7 +683,13 @@ def get_users_list():
         users = []
         for row in result:
             user_dict = dict(row._mapping)
-            # 【关键】清理数据中的空格
+            
+            # 添加头像路径转换
+            if user_dict.get('avatar_path'):
+                filename = os.path.basename(user_dict['avatar_path'])
+                user_dict['avatar_path'] = f'http://127.0.0.1:5000/static/avatars/{filename}'
+            
+            # 其他字段处理（如activity_level）
             user_dict['activity_level'] = user_dict['activity_level'].strip() if user_dict['activity_level'] else '普通用户'
             users.append(user_dict)
         
@@ -728,6 +737,46 @@ def update_user(user_id):
             return jsonify({"success": False, "message": "用户不存在"}), 404
     
     return jsonify({"success": True, "message": "更新成功"})
+
+@bp.route('/users/<user_id>', methods=['DELETE'])
+@admin_required
+def delete_user(user_id):
+    """删除用户（级联删除所有关联数据）"""
+    engine = recommender_service._engine
+    try:
+        with engine.begin() as conn:
+            # 1. 检查用户是否存在
+            user = conn.execute(
+                text("SELECT user_id FROM enhanced_user_features WHERE user_id = :uid"),
+                {"uid": user_id}
+            ).fetchone()
+            if not user:
+                return jsonify({"success": False, "message": "用户不存在"}), 404
+
+            # 2. 删除关联表中的数据（注意顺序）
+            # 交互记录
+            conn.execute(text("DELETE FROM filtered_interactions WHERE user_id = :uid"), {"uid": user_id})
+            conn.execute(text("DELETE FROM train_interactions WHERE user_id = :uid"), {"uid": user_id})
+            conn.execute(text("DELETE FROM test_interactions WHERE user_id = :uid"), {"uid": user_id})
+            conn.execute(text("DELETE FROM user_song_interaction WHERE user_id = :uid"), {"uid": user_id})
+            # 推荐记录
+            conn.execute(text("DELETE FROM recommendations WHERE user_id = :uid"), {"uid": user_id})
+            # 评论及点赞
+            conn.execute(text("DELETE FROM song_comments WHERE original_user_id = :uid"), {"uid": user_id})
+            conn.execute(text("DELETE FROM comment_likes WHERE user_id = :uid"), {"uid": user_id})
+
+            # 3. 删除用户
+            result = conn.execute(
+                text("DELETE FROM enhanced_user_features WHERE user_id = :uid"),
+                {"uid": user_id}
+            )
+
+        logger.info(f"管理员删除用户: {user_id}，已级联删除所有关联数据")
+        return jsonify({"success": True, "message": "用户及其所有数据已删除"})
+
+    except Exception as e:
+        logger.error(f"删除用户失败: {e}")
+        return jsonify({"success": False, "message": f"删除失败: {str(e)}"}), 500
 
 @bp.route('/dashboard/advanced-stats', methods=['GET'])
 @admin_required
@@ -1846,7 +1895,8 @@ def get_user_detail(user_id):
             SELECT 
                 user_id, nickname, gender, age, province, city,
                 role, activity_level, unique_songs, total_interactions,
-                created_at, updated_at
+                created_at, updated_at,
+                avatar_path   -- 添加这一行
             FROM enhanced_user_features 
             WHERE user_id = :user_id
         """)
@@ -1950,9 +2000,10 @@ def get_all_activity_levels():
         with engine.connect() as conn:
             # 获取所有活跃度，并按自定义顺序排序（high > medium > low > 其他）
             result = conn.execute(text("""
-                SELECT DISTINCT activity_level 
+                SELECT activity_level
                 FROM enhanced_user_features 
                 WHERE activity_level IS NOT NULL AND activity_level != ''
+                GROUP BY activity_level
                 ORDER BY 
                     CASE 
                         WHEN activity_level = 'high' THEN 1

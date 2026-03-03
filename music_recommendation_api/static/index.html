@@ -155,9 +155,13 @@
             </div>
 
                         <!-- 用户画像 -->
+            <!-- 推荐页面的用户画像卡片 -->
             <div id="user-profile-card" class="profile-card">
                 <div class="profile-header">
-                    <i class="fas fa-user-circle"></i>
+                    <div class="avatar" id="recommend-profile-avatar-container" style="width:50px;height:50px;border-radius:50%;overflow:hidden;margin-right:10px;">
+                        <img id="recommend-profile-avatar-img" src="" alt="avatar" style="display:none; width:100%;height:100%;object-fit:cover;">
+                        <i id="recommend-profile-avatar-icon" class="fas fa-user-circle" style="display:inline-block; font-size:50px; color:var(--primary-color);"></i>
+                    </div>
                     <h3>用户画像</h3>
                 </div>
                 <div class="profile-content">
@@ -175,9 +179,7 @@
                     </div>
                     <div class="profile-item">
                         <span class="label">偏好流派:</span>
-                        <div id="profile-genres" class="genres-list">
-                            <!-- 流派标签会动态生成 -->
-                        </div>
+                        <div id="profile-genres" class="genres-list"></div>
                     </div>
                 </div>
             </div>
@@ -292,8 +294,10 @@
         <section id="profile" class="section">
             <div class="profile-section">
                 <div class="profile-header-large">
-                    <div class="avatar">
-                        <i class="fas fa-user-circle"></i>
+                    <div class="avatar" id="profile-avatar-container">
+                        <!-- 默认图标，后续替换为图片 -->
+                        <img id="profile-avatar-img" src="" alt="avatar" style="display:none; width:80px; height:80px; border-radius:50%; object-fit:cover;">
+                        <i id="profile-avatar-icon" class="fas fa-user-circle" style="display:inline-block; font-size:80px; color:var(--primary-color);"></i>
                     </div>
                     <div class="profile-info">
                         <h2 id="profile-name">用户<span id="profile-user-id-large">-</span></h2>
