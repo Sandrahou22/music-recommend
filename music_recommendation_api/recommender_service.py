@@ -246,18 +246,66 @@ class RecommenderService:
             logger.error(f"降级模式加载失败: {e}")
 
     def _refresh_fallback_data(self):
-        """刷新兜底热门歌曲（持久化到JSON）"""
+        """刷新兜底热门歌曲（直接从数据库查询，不依赖推荐引擎）"""
         try:
-            if self._recommender:
-                hot_songs = self.get_hot_songs(tier='all', n=100)
-                self._fallback_hot_songs = hot_songs
-                self._last_fallback_update = time.time()
-
-                cache_file = Config.DATASET_DIR / 'fallback_hot_songs.json'
-                with open(cache_file, 'w', encoding='utf-8') as f:
-                    json.dump(hot_songs, f, ensure_ascii=False, indent=2)
+            if self._engine is None:
+                logger.warning("数据库引擎未初始化，无法刷新兜底数据")
+                return
+            
+            # 直接从数据库查询热门歌曲（按最终流行度降序取前100）
+            query = text("""
+                SELECT TOP 100
+                    song_id, song_name, artists, album,
+                    COALESCE(genre_clean, genre) as genre,
+                    COALESCE(final_popularity, popularity, 50) as popularity,
+                    popularity_tier,
+                    CASE 
+                        WHEN audio_path IS NOT NULL AND audio_path != '' THEN 1 
+                        ELSE 0 
+                    END as has_audio
+                FROM enhanced_song_features
+                ORDER BY COALESCE(final_popularity, popularity, 50) DESC
+            """)
+            
+            with self._engine.connect() as conn:
+                result = conn.execute(query)
+                hot_songs = []
+                for row in result:
+                    hot_songs.append({
+                        "song_id": row.song_id,
+                        "song_name": row.song_name,
+                        "artists": row.artists,
+                        "album": row.album,
+                        "genre": row.genre,
+                        "popularity": int(row.popularity) if row.popularity else 50,
+                        "popularity_tier": row.popularity_tier,
+                        "has_audio": bool(row.has_audio),
+                        "cold_start": True,
+                        "fallback": True
+                    })
+            
+            self._fallback_hot_songs = hot_songs
+            self._last_fallback_update = time.time()
+            
+            # 同时保存到JSON文件，以便下次启动时即使数据库不可用也能使用
+            cache_file = Config.DATASET_DIR / 'fallback_hot_songs.json'
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(hot_songs, f, ensure_ascii=False, indent=2)
+            
+            logger.info(f"兜底热门歌曲刷新成功，共 {len(hot_songs)} 首")
+            
         except Exception as e:
-            logger.warning(f"刷新兜底数据失败: {e}")
+            logger.error(f"刷新兜底数据失败: {e}")
+            # 如果刷新失败，尝试从本地缓存文件加载
+            try:
+                cache_file = Config.DATASET_DIR / 'fallback_hot_songs.json'
+                if cache_file.exists():
+                    with open(cache_file, 'r', encoding='utf-8') as f:
+                        self._fallback_hot_songs = json.load(f)
+                    logger.info(f"从缓存文件加载兜底数据，共 {len(self._fallback_hot_songs)} 首")
+            except Exception as cache_err:
+                logger.error(f"加载缓存兜底数据失败: {cache_err}")
 
     # ------------------------------------------------------------------
     # 内部推荐逻辑（核心适配 - 优化版）
@@ -324,16 +372,25 @@ class RecommenderService:
     # 对外接口（保持原签名不变）
     # ------------------------------------------------------------------
     def get_recommendations(self, user_id: str, n: int = 10, algorithm: str = 'hybrid') -> List[Dict]:
-        """主推荐接口"""
+        """主推荐接口（使用熔断器）"""
         try:
-            self._check_initialized()
-            recs = self._get_recommendations_internal(str(user_id), n, algorithm)
+            # 通过熔断器调用内部推荐方法
+            recs = self._circuit_breaker.call(
+                self._get_recommendations_internal, 
+                str(user_id), n, algorithm
+            )
+            # 格式化推荐结果
             is_cold = str(user_id) not in self._valid_users
             results = self._format_recommendations(recs, is_cold)
             if len(results) < n:
                 results = self._fill_with_hot_songs(results, n)
             return results
+        except RuntimeError as e:
+            # 熔断器打开时抛出的异常
+            logger.warning(f"熔断器打开，返回降级数据: {e}")
+            return self._get_fallback_recommendations(n)
         except Exception as e:
+            # 其他异常也返回降级数据（但熔断器会记录失败次数）
             logger.error(f"获取推荐失败: {e}", exc_info=True)
             return self._get_fallback_recommendations(n)
 

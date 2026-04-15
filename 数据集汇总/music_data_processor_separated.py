@@ -419,6 +419,7 @@ class SeparatedMusicDataProcessor:
         print(f"总用户数: {len(user_info)}")
         print(f"  内部: {len(internal_user_mapping)}")
         print(f"  外部: {len(external_user_mapping)}")
+        print("用户ID映射示例:", dict(list(self.original_to_user_id.items())[:5]))
         
         return self.user_id_mapping
     

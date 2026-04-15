@@ -26,6 +26,7 @@ import random
 from datetime import datetime, timedelta
 from collections import Counter
 import hashlib
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 
 # 尝试导入 Faiss
 try:
@@ -608,6 +609,7 @@ class SourceSpecificRecommender:
         
         avg_neighbors = np.mean([len(v) for v in self.content_similarities.values()]) if self.content_similarities else 0
         print(f"      计算完成: {len(self.content_similarities)}歌曲，平均{avg_neighbors:.1f}个邻居")
+        print("内容相似度示例（歌曲 S000003）：", list(self.content_similarities.get('S000003', {}).items())[:5])
     
     def _load_text_embeddings(self):
         """加载或生成文本 embedding"""
