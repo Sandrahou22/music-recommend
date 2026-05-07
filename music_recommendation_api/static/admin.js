@@ -88,7 +88,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // 初始更新一次权重显示
-    updateWeights();
     syncABTestIndicator();
     setupAlgorithmSelectors();
     loadSystemConfig();
@@ -2230,37 +2229,7 @@ function renderPagination(type, total, current) {
 }
 
 // ==================== 系统配置（A/B测试修复） ====================
-function updateWeights() {
-    const itemcf = 35;
-    const usercf = 25;
-    const content = 25;
-    const mf = 15;
-    
-    const total = itemcf + usercf + content + mf;
-    
-    // 只更新存在的元素，避免报错
-    const updateIfExists = (id, value) => {
-        const el = document.getElementById(id);
-        if (el) el.textContent = value;
-    };
-    
-    // 只更新实际存在的元素
-    updateIfExists('itemcf-value', itemcf + '%');
-    updateIfExists('itemcf-display', itemcf + '%');
-    updateIfExists('usercf-value', usercf + '%');
-    updateIfExists('usercf-display', usercf + '%');
-    updateIfExists('content-value', content + '%');
-    updateIfExists('content-display', content + '%');
-    updateIfExists('mf-value', mf + '%');
-    updateIfExists('mf-display', mf + '%');
-    
-    updateIfExists('total-weight', total + '%');
-    
-    const weightWarningEl = document.getElementById('weight-warning');
-    if (weightWarningEl) {
-        weightWarningEl.classList.add('hidden');
-    }
-}
+
 
 // 修复：A/B测试切换时更新全局状态并刷新概览页
 // 修改 toggleABTest 函数

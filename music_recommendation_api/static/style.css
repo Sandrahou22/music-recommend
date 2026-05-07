@@ -232,47 +232,6 @@ body {
     align-items: center;
 }
 
-/* 实时音频可视化 - 无阴影简洁版 */
-.music-visualizer {
-    display: flex;
-    align-items: flex-end;
-    height: 200px;
-    gap: 8px;
-    padding: 20px;
-}
-
-.music-visualizer .bar {
-    width: 16px;
-    background: linear-gradient(to top, var(--primary-color), var(--accent-color));
-    border-radius: 8px;
-    transition: height 0.1s ease;
-    height: 20px; /* 默认高度 */
-    box-shadow: none; /* 移除阴影 */
-}
-
-/* 播放时的激活状态 */
-.music-visualizer.playing .bar {
-    animation: none; /* 移除CSS动画，使用JS控制 */
-}
-
-/* 未播放时的柔和动画 */
-.music-visualizer:not(.playing) .bar {
-    animation: gentle-float 3s ease-in-out infinite;
-}
-
-@keyframes gentle-float {
-    0%, 100% { height: 20px; opacity: 0.3; }
-    50% { height: 40px; opacity: 0.6; }
-}
-
-.music-visualizer:not(.playing) .bar:nth-child(1) { animation-delay: 0s; }
-.music-visualizer:not(.playing) .bar:nth-child(2) { animation-delay: 0.2s; }
-.music-visualizer:not(.playing) .bar:nth-child(3) { animation-delay: 0.4s; }
-.music-visualizer:not(.playing) .bar:nth-child(4) { animation-delay: 0.6s; }
-.music-visualizer:not(.playing) .bar:nth-child(5) { animation-delay: 0.8s; }
-.music-visualizer:not(.playing) .bar:nth-child(6) { animation-delay: 1.0s; }
-.music-visualizer:not(.playing) .bar:nth-child(7) { animation-delay: 1.2s; }
-.music-visualizer:not(.playing) .bar:nth-child(8) { animation-delay: 1.4s; }
 
 @keyframes equalize {
     0%, 100% { transform: scaleY(1); }
@@ -2554,4 +2513,161 @@ body {
 
 #recommend-profile-avatar-img {
     margin-bottom: 45px;
+}
+
+/* ========== 首页轮播图（优化版） ========== */
+.carousel-container {
+    position: relative;
+    width: 100%;
+    max-width: 480px;        /* 调小一点会更精致，可根据喜好调整 */
+    aspect-ratio: 1 / 1;     /* 正方形关键代码 */
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.12);
+    background: #eee;
+    transition: box-shadow 0.3s;
+}
+.carousel-container:hover {
+    box-shadow: 0 20px 48px rgba(0,0,0,0.18);
+}
+
+.carousel-slides {
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+
+.carousel-slide {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    transition: opacity 0.5s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;      /* 只有激活的幻灯片才能点击 */
+}
+
+.carousel-slide.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* 图片处理核心：让正方形图片完美填满横向容器 */
+.carousel-slide img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;         /* 保持比例，裁剪多余部分 */
+    object-position: center;   /* 裁剪从图片中心开始（通常封面主体居中） */
+    transition: transform 0.6s ease, filter 0.3s;
+    filter: brightness(0.92);
+}
+
+/* 鼠标悬停时轻微放大 + 变亮 */
+.carousel-slide:hover img {
+    transform: scale(1.04);
+    filter: brightness(1.05);
+}
+
+/* 文字渐变遮罩 */
+.carousel-caption {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 1.5rem 1.5rem 1rem;
+    background: linear-gradient(transparent, rgba(0,0,0,0.75));
+    color: #fff;
+    font-size: 1.1rem;
+    font-weight: 600;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.5);
+    letter-spacing: 0.5px;
+    transition: padding 0.3s;
+}
+
+/* 左右箭头按钮 */
+.carousel-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 42px;
+    height: 42px;
+    background: rgba(255,255,255,0.75);
+    backdrop-filter: blur(6px);
+    border: none;
+    border-radius: 50%;
+    font-size: 1.2rem;
+    color: #333;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s;
+    z-index: 10;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+.carousel-btn:hover {
+    background: rgba(255,255,255,0.95);
+    transform: translateY(-50%) scale(1.1);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+.carousel-btn.prev { left: 14px; }
+.carousel-btn.next { right: 14px; }
+
+/* 指示点 */
+.carousel-dots {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 10px;
+    z-index: 5;
+}
+
+.dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.45);
+    cursor: pointer;
+    transition: all 0.3s;
+    pointer-events: auto;    /* 保证指示点始终可点击 */
+}
+.dot.active {
+    background: #fff;
+    width: 14px;
+    height: 14px;
+    box-shadow: 0 0 8px rgba(255,255,255,0.7);
+    transform: scale(1.2);
+}
+.dot:hover {
+    background: rgba(255,255,255,0.8);
+}
+
+/* 占位符（图片加载失败时） */
+.carousel-placeholder {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 1.2rem;
+    font-weight: 500;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+}
+.carousel-placeholder i {
+    font-size: 3rem;
+    margin-bottom: 0.6rem;
+    opacity: 0.8;
 }

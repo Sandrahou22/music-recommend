@@ -41,14 +41,14 @@ def get_songs_batch():
 
 @bp.route('/hot', methods=['GET'])
 def get_hot_songs():
-    """获取热门歌曲（分层）"""
+    """获取热门歌曲（分层），同时返回封面 URL"""
     try:
         tier = request.args.get('tier', 'all')
         n = request.args.get('n', 20, type=int)
         n = min(n, 100)
-        
+
         engine = recommender_service._engine
-        
+
         where_clause = ""
         if tier == 'hit':
             where_clause = "WHERE popularity_tier = 'hit'"
@@ -56,7 +56,7 @@ def get_hot_songs():
             where_clause = "WHERE popularity_tier = 'popular'"
         elif tier == 'normal':
             where_clause = "WHERE popularity_tier = 'normal'"
-        
+
         query = text(f"""
             SELECT TOP {n}
                 song_id, song_name, artists, album, 
@@ -64,7 +64,7 @@ def get_hot_songs():
                 COALESCE(final_popularity, popularity, 50) as popularity,
                 popularity_tier,
                 audio_path,
-                cover_path,  -- 添加这一行
+                cover_path,   -- 查询封面路径
                 CASE 
                     WHEN audio_path IS NOT NULL AND audio_path != '' THEN 1 
                     ELSE 0 
@@ -73,32 +73,39 @@ def get_hot_songs():
             {where_clause}
             ORDER BY COALESCE(final_popularity, popularity, 50) DESC
         """)
-        
+
         with engine.connect() as conn:
             result = conn.execute(query)
             songs = []
             for row in result:
-                # 确保流行度是整数
                 popularity = int(row.popularity) if row.popularity else 50
+
+                # 转换封面路径为 URL（仅当封面文件存在时）
+                cover_url = None
+                if row.cover_path and os.path.exists(str(row.cover_path)):
+                    filename = os.path.basename(str(row.cover_path))
+                    cover_url = f'/static/song_covers/{filename}'
+
                 songs.append({
                     "song_id": row.song_id,
                     "song_name": row.song_name,
                     "artists": row.artists,
                     "album": row.album,
                     "genre": row.genre,
-                    "popularity": popularity,  # 真实流行度
+                    "popularity": popularity,
                     "popularity_tier": row.popularity_tier,
-                    "has_audio": bool(row.has_audio)
+                    "has_audio": bool(row.has_audio),
+                    "cover_url": cover_url    # 新增字段
                 })
-        
-        logger.info(f"[热门歌曲] tier={tier}, 返回 {len(songs)} 首歌曲，平均流行度: {sum(s['popularity'] for s in songs)/len(songs) if songs else 0:.1f}")
-        
+
+        logger.info(f"[热门歌曲] tier={tier}, 返回 {len(songs)} 首歌曲，封面数: {sum(1 for s in songs if s.get('cover_url'))}")
+
         return success({
             "tier": tier,
             "count": len(songs),
             "songs": songs
         })
-        
+
     except Exception as e:
         logger.error(f"获取热门歌曲失败: {e}", exc_info=True)
         return error(message=str(e), code=500)

@@ -1761,12 +1761,10 @@ def config_endpoint():
             return jsonify({"success": False, "message": f"保存失败: {str(e)}"}), 500
         
 @bp.route('/config/system', methods=['GET'])
-@admin_required  # 【关键】添加这个装饰器，使用JWT验证
+@admin_required  # 使用JWT验证
 def get_system_config():
-    """获取系统配置"""
+    """获取系统配置（含推荐引擎真实权重）"""
     try:
-        
-        # 从数据库获取配置，如果没有则返回默认配置
         engine = recommender_service._engine
         
         # 检查system_config表是否存在
@@ -1781,7 +1779,6 @@ def get_system_config():
                 result = conn.execute(config_query)
                 config_data = {}
                 for row in result:
-                    # 解析配置键，如 "recommendation.cache_ttl"
                     key_parts = row.config_key.split('.')
                     if len(key_parts) >= 2:
                         section = key_parts[0]
@@ -1790,8 +1787,13 @@ def get_system_config():
                             config_data[section] = {}
                         config_data[section][key] = row.config_value
         else:
-            # 返回默认配置
             config_data = {}
+        
+        # ===== 从推荐引擎获取真实权重 =====
+        internal_weights = recommender_service._internal_weights
+        external_weights = recommender_service._external_weights
+        artist_weight = recommender_service._artist_weight
+        lightfm_weight = recommender_service._lightfm_weight
         
         # 构建配置响应
         config = {
@@ -1812,6 +1814,27 @@ def get_system_config():
             },
             "content": {
                 "similarity_threshold": float(config_data.get('content', {}).get('similarity_threshold', 0.6))
+            },
+            # 新增权重配置（直接从推荐引擎获取，确保前后端一致）
+            "weights": {
+                "internal": {
+                    "itemcf": internal_weights[0],
+                    "usercf": internal_weights[1],
+                    "content": internal_weights[2],
+                    "mf": internal_weights[3],
+                    "sentiment": internal_weights[4],
+                    "artist": artist_weight,
+                    "lightfm": lightfm_weight
+                },
+                "external": {
+                    "itemcf": external_weights[0],
+                    "usercf": external_weights[1],
+                    "content": external_weights[2],
+                    "mf": external_weights[3],
+                    "sentiment": external_weights[4],
+                    "artist": artist_weight,
+                    "lightfm": lightfm_weight
+                }
             }
         }
         

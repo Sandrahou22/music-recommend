@@ -39,9 +39,6 @@ const MAX_ACTIVITIES = 20; // 最多保留20条
 let isPlaylistVisible = false;
 let abTestData = null;
 
-let audioContext = null;
-let analyser = null;
-let visualizerInterval = null;
 
 const REVERSE_MAP = {
     '流行': ['华语流行', '欧美流行', '日本流行', 'Pop', 'K-Pop'],
@@ -160,6 +157,7 @@ function initApp() {
         
         // 更新统计
         updateStats();
+
     }).catch(error => {
         console.error('[初始化] 错误:', error);
         showNotification('部分功能初始化失败', 'error');
@@ -167,12 +165,16 @@ function initApp() {
     
     initTheme();
     initProgressBarDrag();
+
+    // 初始化固定轮播图（无需等待热门歌曲）
+    initHeroCarousel();
     
     isInitialized = true;
     console.log('[初始化] 完成');
 
     // 初始化评论字符计数
     initCommentCharCount();
+
 }
 
 // 检查API连接
@@ -198,7 +200,7 @@ function initAudioPlayer() {
     if (!audioPlayer) {
         audioPlayer = new Audio();
         audioPlayer.crossOrigin = "anonymous";
-        initVisualizer(); // 初始化可视化
+
         // 播放结束自动下一首
         audioPlayer.addEventListener('ended', () => {
             playNext();
@@ -268,63 +270,6 @@ function initAudioPlayer() {
     }
 }
 
-function initVisualizer() {
-    try {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        analyser = audioContext.createAnalyser();
-        analyser.fftSize = 64; // 较小值以获得平滑效果
-        analyser.smoothingTimeConstant = 0.8;
-        
-        const source = audioContext.createMediaElementSource(audioPlayer);
-        source.connect(analyser);
-        analyser.connect(audioContext.destination);
-        
-        // 开始可视化循环
-        updateVisualizers();
-        
-    } catch (e) {
-        console.warn('音频可视化初始化失败:', e);
-    }
-}
-
-function updateVisualizers() {
-    const visualizer = document.getElementById('realtime-visualizer');
-    if (!analyser || !visualizer) {
-        requestAnimationFrame(updateVisualizers);
-        return;
-    }
-    
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-    analyser.getByteFrequencyData(dataArray);
-    
-    const bars = visualizer.querySelectorAll('.bar');
-    const barCount = bars.length;
-    
-    // 将频谱数据映射到8个柱状图
-    for (let i = 0; i < barCount; i++) {
-        // 采样频谱数据（取平均值使效果更平滑）
-        const dataIndex = Math.floor((i / barCount) * (bufferLength / 2));
-        const value = dataArray[dataIndex] || 0;
-        
-        // 映射到高度 (20px - 180px)
-        const height = Math.max(20, (value / 255) * 180);
-        bars[i].style.height = `${height}px`;
-        
-        // 根据音量调整透明度（无阴影，用透明度做层次感）
-        const opacity = 0.3 + (value / 255) * 0.7;
-        bars[i].style.opacity = opacity;
-    }
-    
-    // 检查是否在播放
-    if (audioPlayer && !audioPlayer.paused) {
-        visualizer.classList.add('playing');
-    } else {
-        visualizer.classList.remove('playing');
-    }
-    
-    requestAnimationFrame(updateVisualizers);
-}
 
 // 初始化进度条拖动
 function initProgressBarDrag() {
@@ -761,6 +706,22 @@ function setupEventListeners() {
         });
     }
 }
+
+// 轮播图点击 → 弹出歌曲详情弹窗（与热门推荐中的详情相同）
+document.addEventListener('click', function(e) {
+    const slide = e.target.closest('.carousel-slide');
+    if (!slide) return;
+    if (e.target.closest('.carousel-dots') || e.target.closest('.carousel-btn')) return;
+
+    const index = parseInt(slide.dataset.index);
+    if (isNaN(index) || index < 0 || index >= FIXED_HERO_SONGS.length) return;
+
+    const song = FIXED_HERO_SONGS[index];
+    console.log('🎵 轮播图点击 - 歌曲ID:', song.song_id, '歌曲名:', song.song_name);
+
+    // 调用你已经写好的弹窗函数（可自动处理完整详情和兜底）
+    showCarouselSongDetail(song.song_id, song.song_name);
+});
 
 // ========== 播放列表功能 ==========
 function togglePlaylist() {
@@ -4396,3 +4357,134 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 });
+
+// ========== 首页轮播图 ==========
+let heroCarouselIndex = 0;
+let heroCarouselTimer = null;
+const CAROUSEL_INTERVAL = 3000;
+
+function renderCarousel(slidesData) {
+    const slidesContainer = document.getElementById('carousel-slides');
+    slidesContainer.innerHTML = slidesData.map((song, index) => `
+        <div class="carousel-slide" data-index="${index}" 
+             data-song-id="${song.song_id}" data-song-name="${song.song_name}">
+            <img src="${song.cover_url}" alt="${song.song_name}"
+                 onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+            <div class="carousel-placeholder" style="display:none;">
+                <i class="fas fa-music"></i>
+                <span>${song.song_name}</span>
+            </div>
+            <div class="carousel-caption">${song.song_name}</div>
+        </div>
+    `).join('');
+
+    const dotsContainer = document.getElementById('carousel-dots');
+    dotsContainer.innerHTML = slidesData.map((_, i) => `<span class="dot" data-index="${i}"></span>`).join('');
+    dotsContainer.querySelectorAll('.dot').forEach(dot => {
+        dot.addEventListener('click', function() {
+            const idx = parseInt(this.dataset.index);
+            showSlide(idx);
+            resetCarouselTimer();
+        });
+    });
+    showSlide(0);
+    console.log('渲染后的HTML:', slidesContainer.innerHTML.substring(0, 500));
+}
+
+function showSlide(index) {
+    const slides = document.querySelectorAll('.carousel-slide');
+    const dots = document.querySelectorAll('.dot');
+    if (slides.length === 0) return;
+    heroCarouselIndex = (index + slides.length) % slides.length;
+    slides.forEach(s => s.classList.remove('active'));
+    dots.forEach(d => d.classList.remove('active'));
+    slides[heroCarouselIndex].classList.add('active');
+    dots[heroCarouselIndex]?.classList.add('active');
+}
+
+function nextSlide() {
+    showSlide(heroCarouselIndex + 1);
+}
+function prevSlide() {
+    showSlide(heroCarouselIndex - 1);
+}
+function startCarouselAutoPlay() {
+    stopCarouselAutoPlay();
+    heroCarouselTimer = setInterval(nextSlide, CAROUSEL_INTERVAL);
+}
+function stopCarouselAutoPlay() {
+    if (heroCarouselTimer) clearInterval(heroCarouselTimer);
+}
+function resetCarouselTimer() {
+    stopCarouselAutoPlay();
+    startCarouselAutoPlay();
+}
+
+async function showCarouselSongDetail(songId, songName) {
+    // 清除可能存在的旧数据
+    if (window.tempSongStore) delete window.tempSongStore[songId];
+    try {
+        const resp = await fetch(`${API_BASE_URL}/songs/${songId}`);
+        const data = await resp.json();
+        if (data.success) {
+            displaySongDetail(data.data);
+            document.getElementById('song-modal').classList.add('active');
+            return;
+        }
+    } catch (e) {}
+    showBasicSongModal(songId, songName);
+    document.getElementById('song-modal').classList.add('active');
+}
+
+function showBasicSongModal(songId, songName) {
+    document.getElementById('detail-song-name').textContent = songName;
+    document.getElementById('detail-artists').textContent = '未知艺术家';
+    document.getElementById('detail-genre').textContent = '未知流派';
+    document.getElementById('detail-popularity').textContent = '流行度: -';
+    document.querySelector('.detail-album-art').innerHTML = `<i class="fas fa-music"></i>`;
+    document.getElementById('danceability-value').textContent = '-';
+    document.getElementById('danceability-bar').style.width = '0%';
+    document.getElementById('energy-value').textContent = '-';
+    document.getElementById('energy-bar').style.width = '0%';
+    document.getElementById('valence-value').textContent = '-';
+    document.getElementById('valence-bar').style.width = '0%';
+    document.getElementById('tempo-value').textContent = '- BPM';
+    document.getElementById('recommendation-reason-text').textContent = '基于你的音乐偏好推荐';
+    const playBtn = document.getElementById('play-now-btn');
+    playBtn.dataset.songId = songId;
+    playBtn.onclick = () => {
+        playSong(songId);
+        document.getElementById('song-modal').classList.remove('active');
+    };
+}
+
+const FIXED_HERO_SONGS = [
+    { song_id: 'S000317', song_name: '敏感 (Sensitive-PM)' },
+    { song_id: 'S000319', song_name: '怪咖' },
+    { song_id: 'S000466', song_name: '勇气' },
+    { song_id: 'S000476', song_name: 'If you' },
+    { song_id: 'S000477', song_name: '像风一样' }
+];
+
+function initHeroCarousel() {
+    // 绑定左右箭头点击事件
+    document.getElementById('carousel-prev').addEventListener('click', () => {
+        prevSlide();
+        resetCarouselTimer();
+    });
+    document.getElementById('carousel-next').addEventListener('click', () => {
+        nextSlide();
+        resetCarouselTimer();
+    });
+
+    // 用固定歌曲生成幻灯片
+    const slidesData = FIXED_HERO_SONGS.map(song => ({
+        song_id: song.song_id,
+        cover_url: `http://127.0.0.1:5000/static/song_covers/${song.song_id}.jpg`,
+        song_name: song.song_name
+    }));
+    renderCarousel(slidesData);
+
+    // 启动自动轮播
+    startCarouselAutoPlay();
+}
